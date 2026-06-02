@@ -1,6 +1,10 @@
 #include "ggml-cuda.h"
 #include "ggml-impl.h"
 #include "ggml-backend-impl.h"
+#include "ggml-trace.h"
+#ifdef GGML_HIP_ROCTX
+#include <rocprofiler-sdk-roctx/roctx.h>
+#endif
 
 #include "ggml-cuda/common.cuh"
 #include "ggml-cuda/acc.cuh"
@@ -3537,6 +3541,53 @@ static bool ggml_cuda_check_fusion_memory_ranges(ggml_cgraph * cgraph,
     return is_ok;
 }
 
+#ifdef GGML_HIP_ROCTX
+// P058: one global decode-step counter and one monotonic range-correlation id. The guard below
+// wraps each ggml-op iteration in a roctx range (so rocprofv3 attributes that op's kernels to it)
+// and records the op-group nodes[i_start..i] to the meta CSV, joined to the range via `corr`.
+static std::atomic<uint64_t> g_ggml_cuda_trace_eval{0};
+static std::atomic<uint64_t> g_ggml_cuda_trace_corr{0};
+
+struct ggml_cuda_op_trace_guard {
+    ggml_cgraph * cgraph;
+    const int *   i_ptr;
+    int           i_start;
+    uint64_t      corr;
+    bool          active;
+    ggml_cuda_op_trace_guard(ggml_cgraph * g, const int * i)
+        : cgraph(g), i_ptr(i), i_start(*i), corr(0), active(false) {
+        if (!ggml_trace::enabled()) {
+            return;
+        }
+        const ggml_op op = g->nodes[*i]->op;
+        if (op == GGML_OP_NONE || op == GGML_OP_RESHAPE || op == GGML_OP_VIEW ||
+            op == GGML_OP_PERMUTE || op == GGML_OP_TRANSPOSE) {
+            return;   // launches no kernel; no range
+        }
+        active = true;
+        corr = g_ggml_cuda_trace_corr.fetch_add(1, std::memory_order_relaxed);
+        const std::string id = "p058corr=" + std::to_string((unsigned long long) corr);
+        roctxRangePush(id.c_str());
+    }
+    ~ggml_cuda_op_trace_guard() {
+        if (!active) {
+            return;
+        }
+        roctxRangePop();
+        int i_end = *i_ptr;
+        if (i_end < i_start) i_end = i_start;
+        int n = i_end - i_start + 1;
+        if (n > 32) n = 32;
+        const ggml_tensor * group[32];
+        for (int k = 0; k < n; ++k) {
+            group[k] = cgraph->nodes[i_start + k];
+        }
+        ggml_trace::emit_hip_meta(g_ggml_cuda_trace_eval.load(std::memory_order_relaxed), corr,
+                                  cgraph->nodes[i_start], group, n);
+    }
+};
+#endif // GGML_HIP_ROCTX
+
 static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, const bool use_cuda_graph, const bool cuda_graph_update_required, const void * graph_key) {
     bool graph_evaluated_or_captured = false;
 
@@ -3637,6 +3688,9 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
 
             for (int i = 0; i < cgraph->n_nodes; i++) {
                 ggml_tensor * node = cgraph->nodes[i];
+#ifdef GGML_HIP_ROCTX
+                ggml_cuda_op_trace_guard ggml_cuda_op_trace(cgraph, &i);
+#endif
                 if (is_concurrent_event_active) {
                     GGML_ASSERT(concurrent_event);
 
@@ -4106,6 +4160,10 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backend->context;
 
     ggml_cuda_set_device(cuda_ctx->device);
+
+#ifdef GGML_HIP_ROCTX
+    g_ggml_cuda_trace_eval.fetch_add(1, std::memory_order_relaxed);   // P058: one per decode step
+#endif
 
     bool use_cuda_graph             = false;
     bool cuda_graph_update_required = false;

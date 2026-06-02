@@ -6,6 +6,8 @@
 #include "kernels/hrx_kernel_catalog.h"
 #include "hrx_runtime.h"
 
+#include "ggml-trace.h"
+
 #include <algorithm>
 #include <array>
 #include <cerrno>
@@ -17,6 +19,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <new>
@@ -1472,10 +1475,39 @@ struct ggml_backend_hrx_context {
     uint64_t submit_count = 0;
     uint64_t submit_flush_count = 0;
     const ggml_tensor * submit_last_node = nullptr;
+    uint64_t trace_graph_eval = 0;   // P058: incremented per graph_compute (decode step) for trace rows
 };
 
 static thread_local ggml_backend_hrx_context * g_hrx_active_graph_context = nullptr;
 static thread_local const ggml_tensor * g_hrx_active_graph_node = nullptr;
+
+// P058 trace: per-kernel records captured by the dispatch wrapper during one graph-loop iteration.
+// The wrapper knows the kernel name + timing; the loop guard knows the fused op-group
+// (nodes[i_start..i]). The guard drains these into CSV rows at each iteration's end.
+struct ggml_backend_hrx_trace_pending {
+    std::string kernel;
+    double t_enqueue_us = 0.0;
+    double t_gpu_us = 0.0;
+};
+static thread_local std::vector<ggml_backend_hrx_trace_pending> g_hrx_trace_pending;
+
+// P058 trace: (executable, export_ordinal) -> clean catalog kernel name, registered when each
+// provider is loaded. Used instead of hrx_executable_export_info().name, which can return a
+// concatenation of an executable's bundled variant names.
+static std::mutex g_hrx_kernel_name_mu;
+static std::map<std::pair<uintptr_t, uint32_t>, std::string> g_hrx_kernel_names;
+
+static void ggml_backend_hrx_register_kernel_name(hrx_executable_t executable, uint32_t ordinal,
+                                                  const char * name) {
+    std::lock_guard<std::mutex> lock(g_hrx_kernel_name_mu);
+    g_hrx_kernel_names[{ reinterpret_cast<uintptr_t>(executable), ordinal }] = name ? name : "hrx_kernel";
+}
+
+static std::string ggml_backend_hrx_lookup_kernel_name(hrx_executable_t executable, uint32_t ordinal) {
+    std::lock_guard<std::mutex> lock(g_hrx_kernel_name_mu);
+    auto it = g_hrx_kernel_names.find({ reinterpret_cast<uintptr_t>(executable), ordinal });
+    return it != g_hrx_kernel_names.end() ? it->second : std::string("hrx_kernel");
+}
 
 static bool ggml_backend_hrx_log_status(hrx_status_t status, const char * expr, const char * file, int line) {
     if (hrx_status_is_ok(status)) {
@@ -1617,6 +1649,8 @@ static hrx_status_t ggml_backend_hrx_stream_dispatch(
         const hrx_buffer_ref_t * bindings,
         size_t binding_count,
         uint32_t flags) {
+    const bool   trace = ggml_trace::hrx_enabled();
+    const double t0    = trace ? ggml_trace::now_us() : 0.0;
     hrx_status_t status = hrx_stream_dispatch(
         stream,
         executable,
@@ -1629,6 +1663,16 @@ static hrx_status_t ggml_backend_hrx_stream_dispatch(
         flags);
     if (!hrx_status_is_ok(status)) {
         return status;
+    }
+    if (trace) {
+        // Per-kernel GPU timing requires draining the (otherwise batched) queue for this one
+        // dispatch: flush submits it, synchronize waits for it. Defeats overlap in profile mode.
+        const double t_enqueue = ggml_trace::now_us();
+        GGML_HRX_CHECK(hrx_stream_flush(stream));
+        GGML_HRX_CHECK(hrx_stream_synchronize(stream));
+        const double t_gpu = ggml_trace::now_us();
+        std::string kernel = ggml_backend_hrx_lookup_kernel_name(executable, export_ordinal);
+        g_hrx_trace_pending.push_back({ std::move(kernel), t_enqueue - t0, t_gpu - t0 });
     }
     return ggml_backend_hrx_maybe_submit_batch_after_dispatch(stream);
 }
@@ -2542,6 +2586,7 @@ static bool ggml_backend_hrx_load_catalog_provider(
     provider->export_info.workgroup_size[1] = entry->workgroup_size[1];
     provider->export_info.workgroup_size[2] = entry->workgroup_size[2];
     provider->name = entry->name;
+    ggml_backend_hrx_register_kernel_name(executable, export_ordinal, entry->name);
     return true;
 }
 
@@ -11562,6 +11607,39 @@ struct ggml_backend_hrx_active_graph_guard {
     }
 };
 
+// P058 trace: at each graph-loop iteration's end, attach the fused op-group nodes[i_start..i]
+// (i is advanced by fusion branches before they `continue`) to the kernels the wrapper queued,
+// emitting one CSV row per kernel. Mirrors the HIP loop-guard so both backends see the op-group.
+// Non-contiguous deferred fusions degrade to the consumer-node group (kernel name still encodes
+// the fusion); contiguous fusions (the common decode path) get the full set.
+struct ggml_backend_hrx_iter_trace_guard {
+    ggml_backend_hrx_context * context;
+    const ggml_cgraph *        cgraph;
+    const int *                i_ptr;
+    int                        i_start;
+    bool                       active;
+    ggml_backend_hrx_iter_trace_guard(ggml_backend_hrx_context * ctx, const ggml_cgraph * g, const int * i)
+        : context(ctx), cgraph(g), i_ptr(i), i_start(*i), active(ggml_trace::hrx_enabled()) {}
+    ~ggml_backend_hrx_iter_trace_guard() {
+        if (!active || g_hrx_trace_pending.empty()) {
+            return;
+        }
+        int i_end = *i_ptr;
+        if (i_end < i_start) i_end = i_start;
+        int n = i_end - i_start + 1;
+        if (n > 32) n = 32;
+        const ggml_tensor * group[32];
+        for (int k = 0; k < n; ++k) {
+            group[k] = cgraph->nodes[i_start + k];
+        }
+        for (const auto & p : g_hrx_trace_pending) {
+            ggml_trace::emit_hrx_row(context->trace_graph_eval, cgraph->nodes[i_start],
+                                     p.kernel.c_str(), group, n, p.t_enqueue_us, p.t_gpu_us);
+        }
+        g_hrx_trace_pending.clear();
+    }
+};
+
 static ggml_status ggml_backend_hrx_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
     auto * context = static_cast<ggml_backend_hrx_context *>(backend->context);
     if (!ggml_backend_hrx_sync_graph_entry_streams(context->device_context, context->stream)) {
@@ -11577,9 +11655,13 @@ static ggml_status ggml_backend_hrx_graph_compute(ggml_backend_t backend, ggml_c
     std::vector<ggml_backend_hrx_deferred_ssm_state_gather> deferred_ssm_state_gathers;
     std::vector<ggml_backend_hrx_deferred_gated_delta_net_state_gather> deferred_gated_delta_net_state_gathers;
 
+    context->trace_graph_eval++;     // P058: one increment per graph_compute (decode step)
+    g_hrx_trace_pending.clear();     // drop any stray pre-loop records
+
     for (int i = 0; i < cgraph->n_nodes; ++i) {
         const ggml_tensor * node = cgraph->nodes[i];
         g_hrx_active_graph_node = node;
+        ggml_backend_hrx_iter_trace_guard hrx_iter_trace(context, cgraph, &i);
         if (ggml_backend_hrx_trace_graph_enabled()) {
             std::fprintf(
                 stderr,

@@ -143,3 +143,16 @@ if (GGML_STATIC)
 endif()
 
 target_link_libraries(ggml-hip PRIVATE ggml-base hip::host roc::rocblas roc::hipblas)
+
+# P058: link rocprofiler-sdk-roctx so the HIP backend can emit roctx range markers that rocprofv3
+# attributes kernels to (header + lib come from the composed ROCm prefix). Optional — if the
+# component is absent, the markers (and thus HIP kernel attribution) are simply compiled out.
+find_library(GGML_HIP_ROCTX_LIB NAMES rocprofiler-sdk-roctx roctx64 HINTS "${ROCM_PATH}/lib")
+if (GGML_HIP_ROCTX_LIB)
+    message(STATUS "ggml-hip: roctx markers enabled (${GGML_HIP_ROCTX_LIB})")
+    target_link_libraries(ggml-hip PRIVATE ${GGML_HIP_ROCTX_LIB})
+    target_include_directories(ggml-hip PRIVATE "${ROCM_PATH}/include")
+    target_compile_definitions(ggml-hip PRIVATE GGML_HIP_ROCTX)
+else()
+    message(STATUS "ggml-hip: rocprofiler-sdk-roctx not found; HIP profiling markers disabled")
+endif()
