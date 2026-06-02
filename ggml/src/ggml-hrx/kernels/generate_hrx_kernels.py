@@ -1559,6 +1559,16 @@ KERNELS = [
         "workgroup_size": (256, 1, 1),
     },
     {
+        "name": "hrx_mul_mat_vec_q8_0_swiglu_f32",
+        "source": "mul_mat_vec_q8_0_swiglu.hip.cpp",
+        "format": None,
+        "binding_count": 4,
+        "parameter_count": 7,
+        "constants_size": 24,
+        "workgroup_size": (128, 1, 1),
+        "arch_prefixes": ("gfx11",),
+    },
+    {
         "name": "hrx_flash_attn_ext_f32_f16_decode",
         "source": "flash_attn_ext_f32_f16_decode.hip.cpp",
         "format": None,

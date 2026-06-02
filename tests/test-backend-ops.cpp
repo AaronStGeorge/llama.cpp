@@ -7926,6 +7926,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
         test_cases.emplace_back(new test_add_rms_norm(GGML_TYPE_F32, {n, 1, 1, 1}, 1e-6f, false));
     }
+    // Standalone RMS_NORM at model-scale single-row shapes, vs CPU: ncols
+    // below/at/above one wave (1, 511, 1025), the model width 4096, a
+    // multi-stride width (8192), and a count well past the 512-wide workgroup
+    // that stresses the dual-phase (intra-wave + inter-wave) reduction (33*512).
+    for (uint32_t n : {1, 511, 1025, 4096, 8192, 33*512}) {
+        test_cases.emplace_back(new test_rms_norm(GGML_TYPE_F32, {n, 1, 1, 1}, false, 1e-6f));
+    }
 
     for (auto multi_add : {false, true}) {
         for (auto set_rows : {false, true}) {
@@ -7984,6 +7991,20 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 8192, 1, 5120, {128, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 8192, 512, 5120, {128, 1}, {1, 1}));
 #endif
+
+    // Q8_0 MUL_MAT decode coverage: single-column decode shapes at real Llama
+    // model sizes, including non-power-of-2 row counts and minimum K.
+    //
+    // rows=8192, K=5120, cols=1 — standard Llama-3.1-8B MLP decode shape.
+    // rows=8192, K=4096, cols=1 — attention projection decode shape.
+    // rows=4094, K=4096, cols=1 — non-multiple-of-4 rows (tail guard check).
+    // rows=2,    K=512,  cols=1 — small row count, minimum viable K.
+    // rows=4096, K=5120, cols=2 — multi-column prefill shape (cols>=2).
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 8192, 1, 5120, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 8192, 1, 4096, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 4094, 1, 4096, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32,    2, 1,  512, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 4096, 2, 5120, {1, 1}, {1, 1}));
 
     for (ggml_type type_a : all_types) {
         for (int i = 1; i < 10; ++i) {
@@ -8664,6 +8685,105 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    // Fused q8_0 {MUL_MAT, MUL_MAT, SwiGLU} at FFN decode shapes. Exercises the
+    // q8_0 gate/up + SwiGLU fusion (now on by default; gate/up both q8_0, f32
+    // src1, f32 output) at k=2048/4096 with 1..4 tokens (kernel cols), which the
+    // generic base_types fusion sweep above (m=1, n=32, k=256) does not reach.
+    // The fused kernel produces bit-identical f32 to the CPU reference.
+    for (int64_t k : {2048, 4096}) {
+        for (int64_t tokens : {1, 2, 4}) {
+            test_cases.emplace_back(new test_mul_mat_vec_fusion(
+                GGML_TYPE_Q8_0, GGML_GLU_OP_SWIGLU, /* m = */ tokens, /* n = */ 1536, /* k = */ k,
+                /* use_id = */ false, /* n_mats = */ 1, /* n_used = */ 1, /* b = */ false,
+                /* with_bias = */ false, /* with_gate = */ true, /* batch_dims = */ {1, 1}));
+        }
+    }
+
+    // q8_0 mul_mat_vec at model FFN shapes (k=4096/8192, output rows up to 32,
+    // tokens/cols up to 8) which the generic all_types sweep above (k=256,
+    // m=16, n=1..9) does not reach. Checked against the CPU reference.
+    // Single-token (cols=1) covers the FFN decode bottleneck; the larger cols
+    // (64, 128) cover the multi-token decode path.
+    for (int64_t k : {4096, 8192}) {
+        for (int64_t rows : {1, 16, 32}) {
+            for (int64_t cols : {1, 4, 8, 64, 128}) {
+                // m = output rows (src0 ne1), n = tokens/cols (src1 ne1).
+                test_cases.emplace_back(new test_mul_mat(
+                    GGML_TYPE_Q8_0, GGML_TYPE_F32, /* m = */ rows, /* n = */ cols, /* k = */ k,
+                    /* bs = */ {1, 1}, /* nr = */ {1, 1}));
+            }
+        }
+    }
+    // Edge-case small k < 256 q8_0 mul_mat_vec: k=128 -> 4 q8_0 blocks and
+    // k=64 -> 2 blocks per row, i.e. fewer blocks than a typical reduction has
+    // lanes/slots, which stresses block-iteration bounds handling and idle-lane
+    // tail behavior. Checked against the CPU reference for single- and
+    // multi-token cols.
+    for (int64_t k : {64, 128}) {
+        for (int64_t rows : {1, 16, 32}) {
+            for (int64_t cols : {1, 2, 8}) {
+                test_cases.emplace_back(new test_mul_mat(
+                    GGML_TYPE_Q8_0, GGML_TYPE_F32, /* m = */ rows, /* n = */ cols, /* k = */ k,
+                    /* bs = */ {1, 1}, /* nr = */ {1, 1}));
+            }
+        }
+    }
+    // q8_0 MUL_MAT+ADD fusion: q8_0 weights, f32 src1, fused bias add (no gate),
+    // at the same model FFN shapes. Checked against the CPU reference.
+    for (int64_t k : {4096, 8192}) {
+        for (int64_t tokens : {1, 8}) {
+            test_cases.emplace_back(new test_mul_mat_vec_fusion(
+                GGML_TYPE_Q8_0, GGML_GLU_OP_SWIGLU, /* m = */ tokens, /* n = */ 1536, /* k = */ k,
+                /* use_id = */ false, /* n_mats = */ 1, /* n_used = */ 1, /* b = */ false,
+                /* with_bias = */ true, /* with_gate = */ false, /* batch_dims = */ {1, 1}));
+        }
+    }
+
+    // q8_0 MUL_MAT decode shapes: M=src1->ne[1] in {1,2,4,8} (small-batch token band),
+    // at the four representative K/N projection shapes for Llama-3.1-8B.
+    //   K=4096  N=4096  : attention q/o projection
+    //   K=4096  N=1024  : k/v projection (GQA)
+    //   K=4096  N=14336 : ffn gate/up projection
+    //   K=14336 N=4096  : ffn down projection
+    for (int64_t tokens : {1, 2, 4, 8}) {
+        // attn q / o proj
+        test_cases.emplace_back(new test_mul_mat(
+            GGML_TYPE_Q8_0, GGML_TYPE_F32, /* m = */ 4096, /* n = */ tokens, /* k = */ 4096,
+            /* bs = */ {1, 1}, /* nr = */ {1, 1}));
+        // k/v proj
+        test_cases.emplace_back(new test_mul_mat(
+            GGML_TYPE_Q8_0, GGML_TYPE_F32, /* m = */ 1024, /* n = */ tokens, /* k = */ 4096,
+            /* bs = */ {1, 1}, /* nr = */ {1, 1}));
+        // ffn gate/up
+        test_cases.emplace_back(new test_mul_mat(
+            GGML_TYPE_Q8_0, GGML_TYPE_F32, /* m = */ 14336, /* n = */ tokens, /* k = */ 4096,
+            /* bs = */ {1, 1}, /* nr = */ {1, 1}));
+        // ffn down
+        test_cases.emplace_back(new test_mul_mat(
+            GGML_TYPE_Q8_0, GGML_TYPE_F32, /* m = */ 4096, /* n = */ tokens, /* k = */ 14336,
+            /* bs = */ {1, 1}, /* nr = */ {1, 1}));
+    }
+
+    // Explicit cols={1,2} decode shapes at the Llama-3.1-8B projection sizes.
+    for (int64_t tokens : {1, 2}) {
+        // attn q / o proj
+        test_cases.emplace_back(new test_mul_mat(
+            GGML_TYPE_Q8_0, GGML_TYPE_F32, /* m = */ 4096, /* n = */ tokens, /* k = */ 4096,
+            /* bs = */ {1, 1}, /* nr = */ {1, 1}));
+        // k/v proj (GQA)
+        test_cases.emplace_back(new test_mul_mat(
+            GGML_TYPE_Q8_0, GGML_TYPE_F32, /* m = */ 1024, /* n = */ tokens, /* k = */ 4096,
+            /* bs = */ {1, 1}, /* nr = */ {1, 1}));
+        // ffn gate/up
+        test_cases.emplace_back(new test_mul_mat(
+            GGML_TYPE_Q8_0, GGML_TYPE_F32, /* m = */ 14336, /* n = */ tokens, /* k = */ 4096,
+            /* bs = */ {1, 1}, /* nr = */ {1, 1}));
+        // ffn down
+        test_cases.emplace_back(new test_mul_mat(
+            GGML_TYPE_Q8_0, GGML_TYPE_F32, /* m = */ 4096, /* n = */ tokens, /* k = */ 14336,
+            /* bs = */ {1, 1}, /* nr = */ {1, 1}));
+    }
+
     for (auto gate : {GATING_FUNC_SOFTMAX, GATING_FUNC_SIGMOID, GATING_FUNC_SOFTMAX_WEIGHT}) {
         for (bool with_norm : {false, true}) {
             for (bool bias_probs : {false, true}) {
@@ -8875,6 +8995,17 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
 
     test_cases.emplace_back(new test_flash_attn_ext(64, 64, 8, {8, 1}, 7680, 1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16));
     test_cases.emplace_back(new test_flash_attn_ext(64, 64, 8, {8, 1}, 7680, 4, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16));
+
+    // GQA-8, D=256, decode (nb=1) FLASH_ATTN_EXT coverage vs the CPU golden.
+    // KV lengths include warp-aligned (512) and non-warp-multiple / tail cases
+    // (113, 257, 300) to stress per-lane KV iteration; covers mask, no-mask,
+    // sinks, and logit-softcap paths.
+    for (int kv : { 113, 257, 300, 512, 1024 }) {
+        test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {8, 1}, kv, 1, true,  false, 0.0f,  0.0f, GGML_PREC_F32, GGML_TYPE_F16));
+    }
+    test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {8, 1}, 384, 1, false, false, 0.0f,  0.0f, GGML_PREC_F32, GGML_TYPE_F16));
+    test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {8, 1}, 384, 1, true,  true,  0.0f,  0.0f, GGML_PREC_F32, GGML_TYPE_F16));
+    test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {8, 1}, 384, 1, true,  false, 0.0f, 10.0f, GGML_PREC_F32, GGML_TYPE_F16));
 
     for (int kv : { 4096, 8192, 16384, }) {
         for (int hs : { 64, 128, }) {
