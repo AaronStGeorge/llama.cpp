@@ -2481,6 +2481,78 @@ struct test_rope_set_rows : public test_case {
     }
 };
 
+// GGML_OP_MUL_MAT + GGML_OP_VIEW + GGML_OP_SET_ROWS
+// The q8_0 V-projection at decode followed by the SET_ROWS that writes Vcur into
+// the non-transposed (FA) V cache as f16. Exercises the HRX
+// hrx_mul_mat_vec_q8_0_set_rows_f16 fusion (default-on; opt out via
+// GGML_HRX_DISABLE_MUL_MAT_Q8_0_SET_ROWS_FUSION).
+// run_whole_graph() so the backend's fused MUL_MAT->SET_ROWS lookahead applies.
+struct test_mul_mat_set_rows : public test_case {
+    const ggml_type type_w;   // weight type (q8_0)
+    const int64_t k;          // contraction length (n_embd)
+    const int64_t n_out;      // output features (n_embd_v_gqa)
+    const int64_t n_cache;    // destination cache rows
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "MUL_MAT_SET_ROWS";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    std::string vars() override {
+        return VARS_TO_STR4(type_w, k, n_out, n_cache);
+    }
+
+    test_mul_mat_set_rows(ggml_type type_w = GGML_TYPE_Q8_0,
+            int64_t k = 4096, int64_t n_out = 1024, int64_t n_cache = 32)
+        : type_w(type_w), k(k), n_out(n_out), n_cache(n_cache) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * w = ggml_new_tensor_2d(ctx, type_w, k, n_out);
+        ggml_set_name(w, "w");
+
+        ggml_tensor * cur = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k, 1);
+        ggml_set_name(cur, "cur");
+
+        ggml_tensor * vcur = ggml_mul_mat(ctx, w, cur);   // [n_out, 1]
+        ggml_set_name(vcur, "vcur");
+
+        // non-transposed FA V cache store: view [n_out, 1] -> one cache row
+        ggml_tensor * view = ggml_view_2d(ctx, vcur, n_out, 1, vcur->nb[1], 0);
+
+        ggml_tensor * dst = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, n_out, n_cache);
+        ggml_set_name(dst, "dst");
+
+        ggml_tensor * row_idxs = ggml_new_tensor_3d(ctx, GGML_TYPE_I64, 1, 1, 1);
+        ggml_set_name(row_idxs, "row_idxs");
+
+        ggml_tensor * out = ggml_set_rows(ctx, dst, view, row_idxs);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (strcmp(t->name, "row_idxs") == 0) {
+                if (ggml_is_view_op(t->op)) {
+                    continue;
+                }
+                init_set_rows_row_ids(t, n_cache);
+            } else {
+                init_tensor_uniform(t);
+            }
+        }
+    }
+
+    double max_nmse_err() override {
+        // q8_0 weights (one-bit-off estimate, same form as test_set_rows) then an
+        // f16 cache store; keep a margin above pure-f32 tolerance.
+        return 1e-3;
+    }
+};
+
 // GGML_OP_RMS_NORM + GGML_OP_MUL + GGML_OP_ROPE (+ GGML_OP_VIEW + GGML_OP_SET_ROWS)
 struct test_rms_norm_mul_rope : public test_case {
     const std::array<int64_t, 4> ne;
@@ -3433,6 +3505,62 @@ struct test_rms_norm_back : public test_case {
 };
 
 // GGML_OP_RMS_NORM + GGML_OP_MUL + GGML_OP_ADD
+// GGML_OP_RMS_NORM + GGML_OP_MUL (fused, no trailing add) — the standalone
+// RMS_NORM_MUL path that ggml_backend_hrx_dispatch_rms_norm_mul serves. Covers
+// the wide single-row decode shapes used to select the 1024-thread variant.
+struct test_rms_norm_mul : public test_case {
+    const ggml_type type;
+    const std::array<int64_t, 4> ne;
+    const float eps;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "RMS_NORM_MUL";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    std::string vars() override {
+        return VARS_TO_STR3(type, ne, eps);
+    }
+
+    test_rms_norm_mul(ggml_type type = GGML_TYPE_F32,
+            std::array<int64_t, 4> ne = {64, 5, 4, 3}, float eps = 1e-6f)
+        : type(type), ne(ne), eps(eps) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
+        ggml_tensor * b = ggml_new_tensor(ctx, type, 4, ne.data());
+
+        ggml_set_param(a);
+        ggml_set_name(a, "a");
+        ggml_set_param(b);
+        ggml_set_name(b, "b");
+
+        // Touch a and b before the rms_norm/mul so no OP_NONE sits between them,
+        // matching the fused {RMS_NORM, MUL} subgraph the backend recognizes.
+        a = ggml_add(ctx, a, b);
+        ggml_tensor * out = ggml_mul(ctx, ggml_rms_norm(ctx, a, eps), b);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            init_tensor_uniform(t, -10.f, 10.f);
+        }
+    }
+
+    float grad_eps() override {
+        return 1.0f;
+    }
+
+    bool grad_precise() override {
+        return true;
+    }
+};
+
 struct test_rms_norm_mul_add : public test_case {
     const ggml_type type;
     const std::array<int64_t, 4> ne;
@@ -7402,6 +7530,17 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_set_rows(GGML_TYPE_F32, GGML_TYPE_I64, { 1, 8, 1, 3 }, { 1, 1 }, 2, false));
     test_cases.emplace_back(new test_set_rows(GGML_TYPE_F32, GGML_TYPE_I32, { 1, 8, 1, 3 }, { 1, 1 }, 2, false));
     test_cases.emplace_back(new test_set_rows(GGML_TYPE_Q8_0, GGML_TYPE_I32, { 256, 5, 1, 3 }, { 1, 1, }, 1, false));
+    // HRX fast-div f32->f16 set_rows (GGML_HRX_DISABLE_SET_ROWS_FASTDIV opt-out): the
+    // KV-cache write at Llama-3.1-8B decode is nc = n_embd_v_gqa = 1024, one row.
+    test_cases.emplace_back(new test_set_rows(GGML_TYPE_F16, GGML_TYPE_I64, { 1024, 16, 1, 1 }, { 1, 1 }, 1, false));
+    test_cases.emplace_back(new test_set_rows(GGML_TYPE_F16, GGML_TYPE_I64, { 1024, 16, 2, 1 }, { 1, 1 }, 4, false));
+    // HRX fused q8_0 V-projection + SET_ROWS (default-on; opt out via
+    // GGML_HRX_DISABLE_MUL_MAT_Q8_0_SET_ROWS_FUSION): Llama-3.1-8B decode shape is
+    // k=n_embd=4096, n_out=n_embd_v_gqa=1024 into the non-transposed FA V cache;
+    // plus a couple of smaller shapes. Checked vs CPU.
+    test_cases.emplace_back(new test_mul_mat_set_rows(GGML_TYPE_Q8_0, 4096, 1024, 32));
+    test_cases.emplace_back(new test_mul_mat_set_rows(GGML_TYPE_Q8_0, 4096, 1024, 513));
+    test_cases.emplace_back(new test_mul_mat_set_rows(GGML_TYPE_Q8_0, 2048, 512, 64));
     for (ggml_type type : all_types) {
         for (int b : {1, 7}) {
             for (bool v : {false, true}) {
@@ -7933,6 +8072,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     for (uint32_t n : {1, 511, 1025, 4096, 8192, 33*512}) {
         test_cases.emplace_back(new test_rms_norm(GGML_TYPE_F32, {n, 1, 1, 1}, false, 1e-6f));
     }
+    // Fused RMS_NORM+MUL (no trailing add) at single-row decode widths. ncols at
+    // and above 1024 (1025, 4096 model width, 8192, 33*512) select the
+    // 1024-thread variant; below (1, 511) and the batched {n,5,4,3} shape keep
+    // the 512-thread path. All checked vs CPU.
+    for (uint32_t n : {1, 511, 1025, 4096, 8192, 33*512}) {
+        test_cases.emplace_back(new test_rms_norm_mul(GGML_TYPE_F32, {n, 1, 1, 1}, 1e-6f));
+    }
+    test_cases.emplace_back(new test_rms_norm_mul(GGML_TYPE_F32, {4096, 5, 4, 3}, 1e-6f));
 
     for (auto multi_add : {false, true}) {
         for (auto set_rows : {false, true}) {
@@ -8640,6 +8787,21 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         { 192, 128, 4,  {1, 1},  113, 1,  true,  false, 0.0f,  0.0f, GGML_PREC_F32,     GGML_TYPE_F16,  {0, 1, 2, 3} },
         { 320, 256, 1,  {32, 1}, 512, 1,  true,  false, 0.0f,  0.0f, GGML_PREC_F32,     GGML_TYPE_F16,  {0, 1, 2, 3} },
         { 576, 512, 1,  {20, 1}, 512, 1,  true,  false, 0.0f,  0.0f, GGML_PREC_F32,     GGML_TYPE_F16,  {0, 1, 2, 3} },
+        // D=128, GQA-4 (8 KV heads -> 32 query heads), single decode token (nb=1), SHORT KV — the
+        // Llama-3.1-8B decode geometry. KV values include warp-tail / non-32-multiple (1, 31, 63, 127)
+        // and 256 to stress per-lane KV iteration over the short-context split-K decode path; covers
+        // mask, no-mask, and sinks.
+        { 128, 128, 8,  {4, 1},    1, 1,  true,  false, 0.0f,  0.0f, GGML_PREC_F32,     GGML_TYPE_F16,  {0, 1, 2, 3} },
+        { 128, 128, 8,  {4, 1},   16, 1,  true,  false, 0.0f,  0.0f, GGML_PREC_F32,     GGML_TYPE_F16,  {0, 1, 2, 3} },
+        { 128, 128, 8,  {4, 1},   31, 1,  true,  false, 0.0f,  0.0f, GGML_PREC_F32,     GGML_TYPE_F16,  {0, 1, 2, 3} },
+        { 128, 128, 8,  {4, 1},   32, 1,  true,  false, 0.0f,  0.0f, GGML_PREC_F32,     GGML_TYPE_F16,  {0, 1, 2, 3} },
+        { 128, 128, 8,  {4, 1},   63, 1,  true,  false, 0.0f,  0.0f, GGML_PREC_F32,     GGML_TYPE_F16,  {0, 1, 2, 3} },
+        { 128, 128, 8,  {4, 1},   64, 1,  true,  false, 0.0f,  0.0f, GGML_PREC_F32,     GGML_TYPE_F16,  {0, 1, 2, 3} },
+        { 128, 128, 8,  {4, 1},   96, 1,  true,  false, 0.0f,  0.0f, GGML_PREC_F32,     GGML_TYPE_F16,  {0, 1, 2, 3} },
+        { 128, 128, 8,  {4, 1},  127, 1,  true,  false, 0.0f,  0.0f, GGML_PREC_F32,     GGML_TYPE_F16,  {0, 1, 2, 3} },
+        { 128, 128, 8,  {4, 1},  256, 1,  true,  false, 0.0f,  0.0f, GGML_PREC_F32,     GGML_TYPE_F16,  {0, 1, 2, 3} },
+        { 128, 128, 8,  {4, 1},   96, 1,  false, false, 0.0f,  0.0f, GGML_PREC_F32,     GGML_TYPE_F16,  {0, 1, 2, 3} },
+        { 128, 128, 8,  {4, 1},   96, 1,  true,  true,  0.0f,  0.0f, GGML_PREC_F32,     GGML_TYPE_F16,  {0, 1, 2, 3} },
     };
 
     for (const auto & c : flash_attn_ext_cases) {

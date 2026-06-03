@@ -31,6 +31,18 @@ KERNELS = [
         "workgroup_size": (128, 1, 1),
     },
     {
+        # 1024-thread variant of the fused RMS_NORM+MUL, selected for wide rows
+        # (ncols >= 1024) at decode (nrows == 1); opt out with
+        # GGML_HRX_DISABLE_RMS_NORM_MUL_WG1024. Same ABI / same f32 math as
+        # hrx_rms_norm_mul_f32.
+        "name": "hrx_rms_norm_mul_wg1024_f32",
+        "source": "rms_norm_mul_wg1024_f32.hip.cpp",
+        "format": None,
+        "binding_count": 3,
+        "constants_size": 144,
+        "workgroup_size": (1024, 1, 1),
+    },
+    {
         "name": "hrx_rms_norm_mul_rope_f32",
         "source": "rms_norm_mul_rope_f32.hip.cpp",
         "format": None,
@@ -165,6 +177,18 @@ KERNELS = [
         "format": None,
         "binding_count": 3,
         "constants_size": 128,
+        "workgroup_size": (256, 1, 1),
+    },
+    {
+        # Default-on (opt out via GGML_HRX_DISABLE_SET_ROWS_FASTDIV): faster f32->f16
+        # set_rows variant that decomposes the linear index with host-precomputed
+        # multiply-shift fast-division instead of 64-bit % / (gfx11 has no hw
+        # 64-bit idiv). Same binding ABI; constants carry 5 extra <mp,shift> pairs.
+        "name": "hrx_set_rows_f32_f16_fastdiv",
+        "source": "set_rows_f32_f16_fastdiv.hip.cpp",
+        "format": None,
+        "binding_count": 3,
+        "constants_size": 168,
         "workgroup_size": (256, 1, 1),
     },
     {
@@ -809,6 +833,20 @@ KERNELS = [
     {
         "name": "hrx_mul_mat_vec_bf16_rows4_k2048_cols1_set_rows_f16",
         "source": "mul_mat_vec_bf16_set_rows.hip.cpp",
+        "format": None,
+        "binding_count": 4,
+        "constants_size": 40,
+        "workgroup_size": (256, 1, 1),
+    },
+    {
+        # P058 exp 02 (default-on; opt out GGML_HRX_DISABLE_MUL_MAT_Q8_0_SET_ROWS_FUSION):
+        # q8_0 analogue of mul_mat_vec_bf16_set_rows — fuses the q8_0 V-projection
+        # matmul with the SET_ROWS that writes the result into the non-transposed
+        # (FA) V cache as f16. Single token (cols==1), one workgroup per output
+        # feature, single destination index. Same binding ABI (src0,src1,idxs,dst)
+        # / 40-byte constants as the bf16 variant.
+        "name": "hrx_mul_mat_vec_q8_0_set_rows_f16",
+        "source": "mul_mat_vec_q8_0_set_rows_f16.hip.cpp",
         "format": None,
         "binding_count": 4,
         "constants_size": 40,

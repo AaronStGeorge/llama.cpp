@@ -418,6 +418,56 @@ struct ggml_backend_hrx_set_rows_constants {
 
 static_assert(sizeof(ggml_backend_hrx_set_rows_constants) == 128);
 
+// Default-on (opt out via GGML_HRX_DISABLE_SET_ROWS_FASTDIV): same layout as
+// ggml_backend_hrx_set_rows_constants, plus host-precomputed multiply-shift
+// fast-division magics (<mp, shift>) for each decomposition divisor, so the
+// kernel avoids 64-bit % / (gfx11 has no hardware 64-bit idiv).
+struct ggml_backend_hrx_fastdiv {
+    uint32_t mp;
+    uint32_t shift;
+};
+
+struct ggml_backend_hrx_set_rows_f32_f16_fastdiv_constants {
+    int64_t nc;
+    int64_t nr;
+    int64_t ne02;
+    int64_t ne03;
+    int64_t ne1;
+    int64_t ne11;
+    int64_t ne12;
+    int64_t src0_nb1;
+    int64_t src0_nb2;
+    int64_t src0_nb3;
+    int64_t idx_nb0;
+    int64_t idx_nb1;
+    int64_t idx_nb2;
+    int64_t dst_nb1;
+    int64_t dst_nb2;
+    int64_t dst_nb3;
+    ggml_backend_hrx_fastdiv fd_nc;
+    ggml_backend_hrx_fastdiv fd_nr;
+    ggml_backend_hrx_fastdiv fd_ne02;
+    ggml_backend_hrx_fastdiv fd_ne11;
+    ggml_backend_hrx_fastdiv fd_ne12;
+};
+
+static_assert(sizeof(ggml_backend_hrx_set_rows_f32_f16_fastdiv_constants) == 168);
+
+// Mirror of ggml-cuda common.cuh init_fastdiv_values: compute <mp, shift> such
+// that n/d == ((umulhi(n,mp) + n) >> shift) for all n < 2^31. Requires 0 < d <
+// 2^32. Divisor itself is carried separately in the constants above.
+static ggml_backend_hrx_fastdiv ggml_backend_hrx_init_fastdiv(uint64_t d_64) {
+    GGML_ASSERT(d_64 != 0);
+    GGML_ASSERT(d_64 <= UINT32_MAX);
+    uint32_t d = (uint32_t) d_64;
+    uint32_t L = 0;
+    while (L < 32 && ((uint32_t) 1 << L) < d) {
+        L++;
+    }
+    uint32_t mp = (uint32_t) (((uint64_t) 1 << 32) * (((uint64_t) 1 << L) - d) / d + 1);
+    return ggml_backend_hrx_fastdiv{ mp, L };
+}
+
 struct ggml_backend_hrx_get_rows_f32_constants {
     int64_t nc;
     int64_t nr;
@@ -998,6 +1048,7 @@ struct ggml_backend_hrx_device_context {
     ggml_backend_hrx_op_provider rms_norm_provider;
     ggml_backend_hrx_op_provider rms_norm_mul_provider;
     ggml_backend_hrx_op_provider rms_norm_mul_wg128_provider;
+    ggml_backend_hrx_op_provider rms_norm_mul_wg1024_provider;
     ggml_backend_hrx_op_provider rms_norm_mul_rope_f32_provider;
     ggml_backend_hrx_op_provider rms_norm_mul_rope_set_rows_f32_f16_provider;
     ggml_backend_hrx_op_provider add_rms_norm_mul_broadcast_provider;
@@ -1015,6 +1066,7 @@ struct ggml_backend_hrx_device_context {
     ggml_backend_hrx_op_provider scale_provider;
     ggml_backend_hrx_op_provider set_rows_f32_provider;
     ggml_backend_hrx_op_provider set_rows_f16_provider;
+    ggml_backend_hrx_op_provider set_rows_f16_fastdiv_provider;
     ggml_backend_hrx_op_provider set_rows_q8_0_provider;
     ggml_backend_hrx_op_provider set_rows_q4_0_provider;
     ggml_backend_hrx_op_provider silu_provider;
@@ -1072,6 +1124,7 @@ struct ggml_backend_hrx_device_context {
     ggml_backend_hrx_op_provider mul_mat_vec_bf16_swiglu_wmma16_provider;
     ggml_backend_hrx_op_provider mul_mat_vec_bf16_set_rows_f16_provider;
     ggml_backend_hrx_op_provider mul_mat_vec_bf16_rows4_k2048_cols1_set_rows_f16_provider;
+    ggml_backend_hrx_op_provider mul_mat_vec_q8_0_set_rows_f16_provider;  // P058 exp 02
     ggml_backend_hrx_op_provider mul_mat_vec_f16_provider;
     ggml_backend_hrx_op_provider mul_mat_vec_f16_batched_provider;
     ggml_backend_hrx_op_provider mul_mat_vec_f16_batched_cols1_provider;
@@ -1203,6 +1256,7 @@ static void ggml_backend_hrx_reset_providers(ggml_backend_hrx_device_context * d
     device_context->rms_norm_provider.reset();
     device_context->rms_norm_mul_provider.reset();
     device_context->rms_norm_mul_wg128_provider.reset();
+    device_context->rms_norm_mul_wg1024_provider.reset();
     device_context->rms_norm_mul_rope_f32_provider.reset();
     device_context->rms_norm_mul_rope_set_rows_f32_f16_provider.reset();
     device_context->add_rms_norm_mul_broadcast_provider.reset();
@@ -1220,6 +1274,7 @@ static void ggml_backend_hrx_reset_providers(ggml_backend_hrx_device_context * d
     device_context->scale_provider.reset();
     device_context->set_rows_f32_provider.reset();
     device_context->set_rows_f16_provider.reset();
+    device_context->set_rows_f16_fastdiv_provider.reset();
     device_context->set_rows_q8_0_provider.reset();
     device_context->set_rows_q4_0_provider.reset();
     device_context->silu_provider.reset();
@@ -1277,6 +1332,7 @@ static void ggml_backend_hrx_reset_providers(ggml_backend_hrx_device_context * d
     device_context->mul_mat_vec_bf16_swiglu_wmma16_provider.reset();
     device_context->mul_mat_vec_bf16_set_rows_f16_provider.reset();
     device_context->mul_mat_vec_bf16_rows4_k2048_cols1_set_rows_f16_provider.reset();
+    device_context->mul_mat_vec_q8_0_set_rows_f16_provider.reset();  // P058 exp 02
     device_context->mul_mat_vec_f16_provider.reset();
     device_context->mul_mat_vec_f16_batched_provider.reset();
     device_context->mul_mat_vec_f16_batched_cols1_provider.reset();
@@ -2797,6 +2853,8 @@ static bool ggml_backend_hrx_load_rms_norm_mul_providers(ggml_backend_hrx_device
     ok = ggml_backend_hrx_load_catalog_provider(
         device_context, "hrx_rms_norm_mul_wg128_f32", &device_context->rms_norm_mul_wg128_provider) || ok;
     ok = ggml_backend_hrx_load_catalog_provider(
+        device_context, "hrx_rms_norm_mul_wg1024_f32", &device_context->rms_norm_mul_wg1024_provider) || ok;
+    ok = ggml_backend_hrx_load_catalog_provider(
         device_context, "hrx_rms_norm_mul_rope_f32", &device_context->rms_norm_mul_rope_f32_provider) || ok;
     ok = ggml_backend_hrx_load_catalog_provider(
         device_context,
@@ -2877,6 +2935,11 @@ static bool ggml_backend_hrx_load_set_rows_f32_provider(ggml_backend_hrx_device_
 
 static bool ggml_backend_hrx_load_set_rows_f16_provider(ggml_backend_hrx_device_context * device_context) {
     return ggml_backend_hrx_load_catalog_provider(device_context, "hrx_set_rows_f32_f16", &device_context->set_rows_f16_provider);
+}
+
+static bool ggml_backend_hrx_load_set_rows_f16_fastdiv_provider(ggml_backend_hrx_device_context * device_context) {
+    return ggml_backend_hrx_load_catalog_provider(
+        device_context, "hrx_set_rows_f32_f16_fastdiv", &device_context->set_rows_f16_fastdiv_provider);
 }
 
 static bool ggml_backend_hrx_load_set_rows_q8_0_provider(ggml_backend_hrx_device_context * device_context) {
@@ -3193,6 +3256,9 @@ static bool ggml_backend_hrx_load_mul_mat_vec_providers(ggml_backend_hrx_device_
         &device_context->mul_mat_vec_q6_k_q8_1_x4_mmq32x32_wg128_provider) || ok;
     ok = ggml_backend_hrx_load_catalog_provider(
         device_context, "hrx_mul_mat_vec_q8_0_f32", &device_context->mul_mat_vec_q8_0_provider) || ok;
+    ok = ggml_backend_hrx_load_catalog_provider(  // P058 exp 02
+        device_context, "hrx_mul_mat_vec_q8_0_set_rows_f16",
+        &device_context->mul_mat_vec_q8_0_set_rows_f16_provider) || ok;
     ok = ggml_backend_hrx_load_catalog_provider(
         device_context, "hrx_mul_mat_vec_q8_0_cols8_f32",
         &device_context->mul_mat_vec_q8_0_cols8_provider) || ok;
@@ -4664,6 +4730,25 @@ static bool ggml_backend_hrx_supports_set_rows(
            ggml_is_contiguous_rows(op);
 }
 
+// Default-on (opt out via GGML_HRX_DISABLE_SET_ROWS_FASTDIV). The fast-div kernel is the
+// f32->f16 set_rows with the linear-index decomposition done in 32-bit
+// multiply-shift, so it only applies when dst is F16, its provider is loaded,
+// the base set_rows constraints hold, and the flat element count fits in the
+// signed-32 range the multiply-shift form is exact over (decode KV-cache writes
+// are tiny: nc = n_embd_v_gqa = 1024, nr = ne02 = ne03 = 1).
+static bool ggml_backend_hrx_supports_set_rows_fastdiv(
+        const ggml_backend_hrx_device_context * device_context,
+        const ggml_tensor * op) {
+    if (op->type != GGML_TYPE_F16 ||
+        device_context->set_rows_f16_fastdiv_provider.kind != ggml_backend_hrx_provider_kind::hsaco ||
+        !ggml_backend_hrx_supports_set_rows(device_context, op)) {
+        return false;
+    }
+    const ggml_tensor * src0 = op->src[0];
+    const int64_t total = src0->ne[0] * src0->ne[1] * src0->ne[2] * src0->ne[3];
+    return total > 0 && total < (int64_t) 1 << 31;
+}
+
 static bool ggml_backend_hrx_supports_get_rows_f32(
         const ggml_backend_hrx_device_context * device_context,
         const ggml_tensor * op) {
@@ -5792,6 +5877,53 @@ static const ggml_backend_hrx_op_provider * ggml_backend_hrx_select_mul_mat_vec_
     }
 
     return nullptr;
+}
+
+// P058 exp 02 (default-on; opt out via GGML_HRX_DISABLE_MUL_MAT_Q8_0_SET_ROWS_FUSION):
+// q8_0 V-projection matmul fused with the SET_ROWS that writes its result into the
+// non-transposed (FA) V cache as f16. Decode only: a single token (src1->ne[1] == 1)
+// and a single destination index, so hrx_mul_mat_vec_q8_0_set_rows_f16 loads one idx
+// and writes each output feature contiguously into cache_v[dst_row]. Same numeric
+// path as hrx_mul_mat_vec_q8_0_f32 (which supports_mul_mat_vec gates), just storing
+// f16 to the cache instead of f32 to a scratch buffer.
+static bool ggml_backend_hrx_supports_mul_mat_vec_q8_0_set_rows_f16(
+        const ggml_backend_hrx_device_context * device_context,
+        const ggml_tensor * mul_mat,
+        const ggml_tensor * adapter,
+        const ggml_tensor * set_rows) {
+    return !ggml_backend_hrx_env_enabled("GGML_HRX_DISABLE_MUL_MAT_Q8_0_SET_ROWS_FUSION") &&
+           !ggml_backend_hrx_env_enabled("GGML_HRX_DISABLE_FUSION") &&
+           !ggml_backend_hrx_env_enabled("GGML_HRX_DISABLE_MUL_MAT_SET_ROWS_FUSION") &&
+           device_context->mul_mat_vec_q8_0_set_rows_f16_provider.kind ==
+               ggml_backend_hrx_provider_kind::hsaco &&
+           mul_mat &&
+           adapter &&
+           set_rows &&
+           mul_mat->op == GGML_OP_MUL_MAT &&
+           set_rows->op == GGML_OP_SET_ROWS &&
+           ggml_backend_hrx_unwrap_reshape_view_src0(adapter) == mul_mat &&
+           set_rows->src[0] == adapter &&
+           set_rows->type == GGML_TYPE_F16 &&
+           set_rows->src[1] &&
+           set_rows->src[1]->type == GGML_TYPE_I64 &&
+           set_rows->src[2] &&
+           set_rows->src[2]->type == GGML_TYPE_F16 &&
+           mul_mat->src[0] &&
+           mul_mat->src[1] &&
+           mul_mat->src[0]->type == GGML_TYPE_Q8_0 &&
+           mul_mat->src[1]->type == GGML_TYPE_F32 &&
+           mul_mat->src[1]->ne[1] == 1 &&            // single decode token
+           ggml_backend_hrx_supports_mul_mat_vec(device_context, mul_mat) &&
+           ggml_backend_hrx_supports_set_rows(device_context, set_rows) &&
+           // non-transposed FA V cache: each output feature is one f16 in cache_v[dst_row]
+           ggml_nelements(adapter) == ggml_nelements(mul_mat) &&
+           adapter->ne[0] == mul_mat->ne[0] &&
+           set_rows->ne[0] == mul_mat->ne[0] &&
+           // a single destination row index (one token -> one cache row)
+           set_rows->src[1]->ne[0] == 1 &&
+           set_rows->src[1]->ne[1] == 1 &&
+           set_rows->src[1]->ne[2] == 1 &&
+           set_rows->src[1]->ne[3] == 1;
 }
 
 static bool ggml_backend_hrx_supports_mul_mat_vec_bf16_set_rows_f16(
@@ -7883,11 +8015,25 @@ static ggml_status ggml_backend_hrx_dispatch_rms_norm_mul(
     const bool use_wg128 =
         constants.ncols <= 128 &&
         context->device_context->rms_norm_mul_wg128_provider.kind == ggml_backend_hrx_provider_kind::hsaco;
+    // For a wide single-row decode rms_norm (ncols >= 1024, nrows == 1) one
+    // 512-thread workgroup is latency-bound on the strided gather; a 1024-thread
+    // workgroup doubles in-flight loads to hide it (mirrors HIP norm.cu's
+    // block_dims(1024) for ncols >= 1024). Same ABI / same f32 math ->
+    // bit-identical to the 512-thread kernel. Default-ON; opt out with
+    // GGML_HRX_DISABLE_RMS_NORM_MUL_WG1024.
+    const bool use_wg1024 =
+        !use_wg128 &&
+        constants.ncols >= 1024 &&
+        constants.nrows == 1 &&
+        !ggml_backend_hrx_env_enabled("GGML_HRX_DISABLE_RMS_NORM_MUL_WG1024") &&
+        context->device_context->rms_norm_mul_wg1024_provider.kind == ggml_backend_hrx_provider_kind::hsaco;
     const auto & provider = use_wg128 ?
         context->device_context->rms_norm_mul_wg128_provider :
-        context->device_context->rms_norm_mul_provider;
+        (use_wg1024 ?
+            context->device_context->rms_norm_mul_wg1024_provider :
+            context->device_context->rms_norm_mul_provider);
     const uint32_t workgroup_size = provider.export_info.workgroup_size[0] ?
-        provider.export_info.workgroup_size[0] : (use_wg128 ? 128 : 512);
+        provider.export_info.workgroup_size[0] : (use_wg128 ? 128 : (use_wg1024 ? 1024 : 512));
     hrx_dispatch_config_t config = {
         /* .workgroup_count = */ { static_cast<uint32_t>(constants.nrows), 1, 1 },
         /* .workgroup_size = */ { workgroup_size, 1, 1 },
@@ -8567,6 +8713,77 @@ static ggml_status ggml_backend_hrx_dispatch_set_rows(
     const int64_t logical_cols =
         ggml_is_quantized(dst->type) ? constants.nc / ggml_blck_size(dst->type) : constants.nc;
     const int64_t total = logical_cols * constants.nr * constants.ne02 * constants.ne03;
+    const uint32_t workgroup_size = provider->export_info.workgroup_size[0] ?
+        provider->export_info.workgroup_size[0] : 256;
+    hrx_dispatch_config_t config = {
+        /* .workgroup_count = */ {
+            static_cast<uint32_t>((total + workgroup_size - 1) / workgroup_size),
+            1,
+            1,
+        },
+        /* .workgroup_size = */ { workgroup_size, 1, 1 },
+        /* .subgroup_size = */ 0,
+    };
+
+    if (!GGML_HRX_CHECK(hrx_stream_dispatch(
+            context->stream,
+            provider->executable,
+            provider->export_ordinal,
+            &config,
+            &constants,
+            sizeof(constants),
+            bindings,
+            3,
+            HRX_DISPATCH_FLAG_NONE))) {
+        return GGML_STATUS_FAILED;
+    }
+
+    return GGML_STATUS_SUCCESS;
+}
+
+// Default-on (opt out via GGML_HRX_DISABLE_SET_ROWS_FASTDIV): f32->f16 set_rows with
+// host-precomputed multiply-shift fast-division. Identical binding ABI and
+// element mapping to dispatch_set_rows; only the constants blob and the kernel
+// differ (no 64-bit % / in the kernel).
+static ggml_status ggml_backend_hrx_dispatch_set_rows_fastdiv(
+        ggml_backend_hrx_context * context,
+        const ggml_tensor * dst) {
+    const ggml_tensor * src0 = dst->src[0];
+    const ggml_tensor * src1 = dst->src[1];
+    hrx_buffer_ref_t bindings[3] = {};
+    if (!ggml_backend_hrx_tensor_buffer_ref(src0, &bindings[0]) ||
+        !ggml_backend_hrx_tensor_buffer_ref(src1, &bindings[1]) ||
+        !ggml_backend_hrx_tensor_buffer_ref(dst, &bindings[2])) {
+        GGML_LOG_ERROR("%s: SET_ROWS tensor is not backed by a HRX buffer\n", __func__);
+        return GGML_STATUS_FAILED;
+    }
+
+    ggml_backend_hrx_set_rows_f32_f16_fastdiv_constants constants = {
+        /* .nc       = */ src0->ne[0],
+        /* .nr       = */ src0->ne[1],
+        /* .ne02     = */ src0->ne[2],
+        /* .ne03     = */ src0->ne[3],
+        /* .ne1      = */ dst->ne[1],
+        /* .ne11     = */ src1->ne[1],
+        /* .ne12     = */ src1->ne[2],
+        /* .src0_nb1 = */ static_cast<int64_t>(src0->nb[1]),
+        /* .src0_nb2 = */ static_cast<int64_t>(src0->nb[2]),
+        /* .src0_nb3 = */ static_cast<int64_t>(src0->nb[3]),
+        /* .idx_nb0  = */ static_cast<int64_t>(src1->nb[0]),
+        /* .idx_nb1  = */ static_cast<int64_t>(src1->nb[1]),
+        /* .idx_nb2  = */ static_cast<int64_t>(src1->nb[2]),
+        /* .dst_nb1  = */ static_cast<int64_t>(dst->nb[1]),
+        /* .dst_nb2  = */ static_cast<int64_t>(dst->nb[2]),
+        /* .dst_nb3  = */ static_cast<int64_t>(dst->nb[3]),
+        /* .fd_nc    = */ ggml_backend_hrx_init_fastdiv(src0->ne[0]),
+        /* .fd_nr    = */ ggml_backend_hrx_init_fastdiv(src0->ne[1]),
+        /* .fd_ne02  = */ ggml_backend_hrx_init_fastdiv(src0->ne[2]),
+        /* .fd_ne11  = */ ggml_backend_hrx_init_fastdiv(src1->ne[1]),
+        /* .fd_ne12  = */ ggml_backend_hrx_init_fastdiv(src1->ne[2]),
+    };
+
+    const ggml_backend_hrx_op_provider * provider = &context->device_context->set_rows_f16_fastdiv_provider;
+    const int64_t total = constants.nc * constants.nr * constants.ne02 * constants.ne03;
     const uint32_t workgroup_size = provider->export_info.workgroup_size[0] ?
         provider->export_info.workgroup_size[0] : 256;
     hrx_dispatch_config_t config = {
@@ -9361,6 +9578,66 @@ static ggml_status ggml_backend_hrx_dispatch_mul_mat_vec_q8_0_swiglu(
 
     return GGML_HRX_CHECK(hrx_stream_dispatch(
         context->stream, provider->executable, provider->export_ordinal, &config,
+        &constants, sizeof(constants), bindings, 4, HRX_DISPATCH_FLAG_NONE)) ?
+        GGML_STATUS_SUCCESS : GGML_STATUS_FAILED;
+}
+
+// P058 exp 02: dispatch the fused q8_0 V-projection + SET_ROWS kernel.
+static ggml_status ggml_backend_hrx_dispatch_mul_mat_vec_q8_0_set_rows_f16(
+        ggml_backend_hrx_context * context,
+        const ggml_tensor * mul_mat,
+        const ggml_tensor * set_rows) {
+    const ggml_tensor * src0 = mul_mat->src[0];
+    const ggml_tensor * src1 = mul_mat->src[1];
+    const ggml_tensor * idxs = set_rows->src[1];
+    hrx_buffer_ref_t bindings[4] = {};
+    if (!ggml_backend_hrx_tensor_buffer_ref(src0, &bindings[0]) ||
+        !ggml_backend_hrx_tensor_buffer_ref(src1, &bindings[1]) ||
+        !ggml_backend_hrx_tensor_buffer_ref(idxs, &bindings[2]) ||
+        !ggml_backend_hrx_tensor_buffer_ref(set_rows, &bindings[3])) {
+        GGML_LOG_ERROR("%s: MUL_MAT_Q8_0_SET_ROWS tensor is not backed by a HRX buffer\n", __func__);
+        return GGML_STATUS_FAILED;
+    }
+
+    ggml_backend_hrx_mul_mat_vec_bf16_set_rows_constants constants = {
+        /* .k            = */ src0->ne[0],
+        /* .rows         = */ src0->ne[1],
+        /* .set_rows_ne1 = */ set_rows->ne[1],
+        /* .idx_nb0      = */ static_cast<int64_t>(idxs->nb[0]),
+        /* .dst_nb1      = */ static_cast<int64_t>(set_rows->nb[1]),
+    };
+
+    const auto & provider = context->device_context->mul_mat_vec_q8_0_set_rows_f16_provider;
+    if (provider.kind != ggml_backend_hrx_provider_kind::hsaco) {
+        GGML_LOG_ERROR("%s: MUL_MAT_Q8_0_SET_ROWS provider is unavailable\n", __func__);
+        return GGML_STATUS_FAILED;
+    }
+
+    const uint32_t workgroup_size = provider.export_info.workgroup_size[0] ?
+        provider.export_info.workgroup_size[0] : 256;
+    hrx_dispatch_config_t config = {
+        /* .workgroup_count = */ { static_cast<uint32_t>(constants.rows), 1, 1 },
+        /* .workgroup_size = */ { workgroup_size, 1, 1 },
+        /* .subgroup_size = */ 0,
+    };
+
+    if (ggml_backend_hrx_trace_routes_enabled()) {
+        std::fprintf(
+            stderr,
+            "HRX route MUL_MAT_SET_ROWS provider=%s type=q8_0 k=%" PRId64 " rows=%" PRId64
+            " dst_rows=%" PRId64 " wg_count=[%u,%u,%u] dst=%s\n",
+            provider.name.c_str(),
+            constants.k,
+            constants.rows,
+            constants.set_rows_ne1,
+            config.workgroup_count[0],
+            config.workgroup_count[1],
+            config.workgroup_count[2],
+            set_rows->name);
+    }
+
+    return GGML_HRX_CHECK(hrx_stream_dispatch(
+        context->stream, provider.executable, provider.export_ordinal, &config,
         &constants, sizeof(constants), bindings, 4, HRX_DISPATCH_FLAG_NONE)) ?
         GGML_STATUS_SUCCESS : GGML_STATUS_FAILED;
 }
@@ -12484,6 +12761,69 @@ static ggml_status ggml_backend_hrx_graph_compute(ggml_backend_t backend, ggml_c
                 }
             }
         }
+        // P058 exp 02 (default-on; opt out via GGML_HRX_DISABLE_MUL_MAT_Q8_0_SET_ROWS_FUSION):
+        // q8_0 V-projection matmul fused with its non-transposed-cache SET_ROWS. Same
+        // lookahead / collect_reshape_view_chain / can_fuse_subgraph_ext validation as the
+        // bf16 branch. supports_...q8_0... carries the opt-out gate (and the strict q8_0 /
+        // single-token geometry checks), so non-matching graphs fall through unchanged.
+        if (node->op == GGML_OP_MUL_MAT &&
+            !ggml_backend_hrx_env_enabled("GGML_HRX_DISABLE_FUSION") &&
+            !ggml_backend_hrx_env_enabled("GGML_HRX_DISABLE_MUL_MAT_SET_ROWS_FUSION") &&
+            !ggml_backend_hrx_env_enabled("GGML_HRX_DISABLE_MUL_MAT_Q8_0_SET_ROWS_FUSION")) {
+            const int end = std::min(cgraph->n_nodes, i + 96);
+            bool dispatched_mul_mat_set_rows = false;
+            for (int set_rows_idx = i + 1; set_rows_idx < end; ++set_rows_idx) {
+                const ggml_tensor * set_rows = cgraph->nodes[set_rows_idx];
+                if (!set_rows || set_rows->op != GGML_OP_SET_ROWS) {
+                    continue;
+                }
+                if (!ggml_backend_hrx_supports_mul_mat_vec_q8_0_set_rows_f16(
+                        context->device_context, node, set_rows->src[0], set_rows)) {
+                    continue;
+                }
+
+                std::vector<std::pair<int, ggml_op>> indexed_ops;
+                std::vector<const ggml_tensor *> metadata_nodes;
+                indexed_ops.push_back({ i, GGML_OP_MUL_MAT });
+                if (!ggml_backend_hrx_collect_reshape_view_chain(
+                        cgraph, set_rows->src[0], node, i + 1, set_rows_idx, &indexed_ops, &metadata_nodes)) {
+                    continue;
+                }
+                indexed_ops.push_back({ set_rows_idx, GGML_OP_SET_ROWS });
+                std::sort(indexed_ops.begin(), indexed_ops.end());
+                bool duplicate = false;
+                for (size_t idx = 1; idx < indexed_ops.size(); ++idx) {
+                    duplicate = duplicate || indexed_ops[idx].first == indexed_ops[idx - 1].first;
+                }
+                if (duplicate) {
+                    continue;
+                }
+
+                std::vector<int> idxs;
+                std::vector<ggml_op> ops;
+                idxs.reserve(indexed_ops.size());
+                ops.reserve(indexed_ops.size());
+                for (const auto & indexed_op : indexed_ops) {
+                    idxs.push_back(indexed_op.first);
+                    ops.push_back(indexed_op.second);
+                }
+                int outputs[1] = { set_rows_idx };
+                if (!ggml_can_fuse_subgraph_ext(
+                        cgraph, idxs.data(), static_cast<int>(idxs.size()), ops.data(), outputs, 1)) {
+                    continue;
+                }
+                if (ggml_backend_hrx_dispatch_mul_mat_vec_q8_0_set_rows_f16(context, node, set_rows) !=
+                    GGML_STATUS_SUCCESS) {
+                    return GGML_STATUS_FAILED;
+                }
+                fused_mul_mat_set_rows_nodes.push_back(set_rows);
+                dispatched_mul_mat_set_rows = true;
+                break;
+            }
+            if (dispatched_mul_mat_set_rows) {
+                continue;
+            }
+        }
         if (node->op == GGML_OP_MUL_MAT &&
             !ggml_backend_hrx_env_enabled("GGML_HRX_DISABLE_FUSION") &&
             !ggml_backend_hrx_env_enabled("GGML_HRX_DISABLE_MUL_MAT_SET_ROWS_FUSION")) {
@@ -13048,6 +13388,13 @@ static ggml_status ggml_backend_hrx_graph_compute(ggml_backend_t backend, ggml_c
                     GGML_LOG_ERROR("%s: SET_ROWS shape/type/layout is unsupported\n", __func__);
                     return GGML_STATUS_FAILED;
                 }
+                if (!ggml_backend_hrx_env_enabled("GGML_HRX_DISABLE_SET_ROWS_FASTDIV") &&
+                    ggml_backend_hrx_supports_set_rows_fastdiv(context->device_context, node)) {
+                    if (ggml_backend_hrx_dispatch_set_rows_fastdiv(context, node) != GGML_STATUS_SUCCESS) {
+                        return GGML_STATUS_FAILED;
+                    }
+                    break;
+                }
                 if (ggml_backend_hrx_dispatch_set_rows(context, node) != GGML_STATUS_SUCCESS) {
                     return GGML_STATUS_FAILED;
                 }
@@ -13488,6 +13835,7 @@ static std::unique_ptr<ggml_backend_hrx_reg_context> ggml_backend_hrx_create_reg
         (void) ggml_backend_hrx_load_scale_provider(device_context.get());
         (void) ggml_backend_hrx_load_set_rows_f32_provider(device_context.get());
         (void) ggml_backend_hrx_load_set_rows_f16_provider(device_context.get());
+        (void) ggml_backend_hrx_load_set_rows_f16_fastdiv_provider(device_context.get());
         (void) ggml_backend_hrx_load_set_rows_q8_0_provider(device_context.get());
         (void) ggml_backend_hrx_load_set_rows_q4_0_provider(device_context.get());
         (void) ggml_backend_hrx_load_silu_provider(device_context.get());
