@@ -123,8 +123,10 @@ set(GGML_HRX_WAVE32_KERNEL_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/kernels/div_f32_broadcast.hip.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/kernels/flash_attn_ext_f32_bf16_decode.hip.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/kernels/flash_attn_ext_f32_f16_decode.hip.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/kernels/flash_attn_ext_f32_f16_decode_combine.hip.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/kernels/flash_attn_ext_f32_f16_decode_gqa8_reduce.hip.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/kernels/flash_attn_ext_f32_f16_decode_gqa8_split.hip.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/kernels/flash_attn_ext_f32_f16_decode_split.hip.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/kernels/flash_attn_ext_f32_f16_prefill_tile8.hip.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/kernels/flash_attn_ext_f32_f32_decode.hip.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/kernels/flash_attn_ext_f32_q4_0_decode.hip.cpp"
@@ -158,6 +160,7 @@ set(GGML_HRX_WAVE32_KERNEL_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/kernels/rms_norm_mul_f32.hip.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/kernels/rms_norm_mul_rope_f32.hip.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/kernels/rope_f32.hip.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/kernels/rope_norm_f32.hip.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/kernels/rope_set_rows_f32_f16.hip.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/kernels/row_reduce_f32.hip.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/kernels/scale_f32.hip.cpp"
@@ -280,6 +283,20 @@ ggml_add_backend_library(ggml-hrx
 
 target_link_libraries(ggml-hrx PRIVATE hrx::hrx)
 target_include_directories(ggml-hrx PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${GGML_HRX_GENERATED_DIR}")
+
+# HIP runtime for the optional GGML_HRX_DISPATCH_VIA_HIP profiling mode: launch the prebuilt HSACO
+# kernels through hipModuleLaunchKernel so rocprofv3 can profile them apples-to-apples with the HIP
+# backend. Host runtime only (no device compilation here) — mirrors the ggml-hip roctx find_library
+# pattern + the HIP-bench -lamdhip64 linkage above. GGML_HRX_HAVE_HIP gates the HIP path in ggml-hrx.cpp.
+find_library(GGML_HRX_HIP_LIB NAMES amdhip64 HINTS "${GGML_HRX_ROCM_PATH}/lib")
+if (GGML_HRX_HIP_LIB)
+    message(STATUS "HRX: HIP runtime found (${GGML_HRX_HIP_LIB}) -- GGML_HRX_DISPATCH_VIA_HIP available")
+    target_link_libraries(ggml-hrx PRIVATE ${GGML_HRX_HIP_LIB})
+    target_include_directories(ggml-hrx PRIVATE "${GGML_HRX_ROCM_PATH}/include")
+    target_compile_definitions(ggml-hrx PRIVATE __HIP_PLATFORM_AMD__=1 GGML_HRX_HAVE_HIP)
+else()
+    message(STATUS "HRX: HIP runtime not found -- GGML_HRX_DISPATCH_VIA_HIP disabled")
+endif()
 
 option(GGML_HRX_BUILD_HIP_BENCHES "Build native HIP microbenchmarks for HRX kernels" ON)
 

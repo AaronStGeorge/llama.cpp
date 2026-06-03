@@ -14,6 +14,7 @@
 #include <cinttypes>
 #include <cmath>
 #include <cstddef>
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -26,6 +27,10 @@
 #include <string>
 #include <utility>
 #include <vector>
+
+#ifdef GGML_HRX_HAVE_HIP
+#include <hip/hip_runtime.h>  // P058: optional HIP-dispatch profiling mode (GGML_HRX_DISPATCH_VIA_HIP)
+#endif
 
 namespace {
 
@@ -1150,6 +1155,8 @@ struct ggml_backend_hrx_device_context {
     ggml_backend_hrx_op_provider flash_attn_ext_f16_provider;
     ggml_backend_hrx_op_provider flash_attn_ext_f16_decode_gqa8_split_provider;
     ggml_backend_hrx_op_provider flash_attn_ext_f16_decode_gqa8_reduce_provider;
+    ggml_backend_hrx_op_provider flash_attn_ext_f16_decode_split_provider;
+    ggml_backend_hrx_op_provider flash_attn_ext_f16_decode_combine_provider;
     ggml_backend_hrx_op_provider flash_attn_ext_f16_prefill_tile_provider;
     ggml_backend_hrx_op_provider flash_attn_ext_f16_prefill_wmma_provider;
     ggml_backend_hrx_op_provider flash_attn_ext_f16_prefill_direct_provider;
@@ -1173,6 +1180,7 @@ struct ggml_backend_hrx_device_context {
     ggml_backend_hrx_op_provider topk_moe_f32_wave32_n128_top8_norm_provider;
     ggml_backend_hrx_op_provider topk_moe_f32_wave32_n256_top8_norm_provider;
     ggml_backend_hrx_op_provider rope_f32_provider;
+    ggml_backend_hrx_op_provider rope_norm_f32_provider;
     ggml_backend_hrx_op_provider rope_set_rows_f32_f16_provider;
     ggml_backend_hrx_op_provider ssm_conv_provider;
     ggml_backend_hrx_op_provider ssm_conv_update_provider;
@@ -1362,6 +1370,8 @@ static void ggml_backend_hrx_reset_providers(ggml_backend_hrx_device_context * d
     device_context->flash_attn_ext_f16_provider.reset();
     device_context->flash_attn_ext_f16_decode_gqa8_split_provider.reset();
     device_context->flash_attn_ext_f16_decode_gqa8_reduce_provider.reset();
+    device_context->flash_attn_ext_f16_decode_split_provider.reset();
+    device_context->flash_attn_ext_f16_decode_combine_provider.reset();
     device_context->flash_attn_ext_f16_prefill_tile_provider.reset();
     device_context->flash_attn_ext_f16_prefill_wmma_provider.reset();
     device_context->flash_attn_ext_f16_prefill_direct_provider.reset();
@@ -1385,6 +1395,7 @@ static void ggml_backend_hrx_reset_providers(ggml_backend_hrx_device_context * d
     device_context->topk_moe_f32_wave32_n128_top8_norm_provider.reset();
     device_context->topk_moe_f32_wave32_n256_top8_norm_provider.reset();
     device_context->rope_f32_provider.reset();
+    device_context->rope_norm_f32_provider.reset();
     device_context->rope_set_rows_f32_f16_provider.reset();
     device_context->ssm_conv_provider.reset();
     device_context->ssm_conv_update_provider.reset();
@@ -1641,6 +1652,190 @@ static hrx_status_t ggml_backend_hrx_maybe_submit_batch_after_dispatch(hrx_strea
     return hrx_ok_status();
 }
 
+#ifdef GGML_HRX_HAVE_HIP
+// P058 HIP-dispatch mode: launch a prebuilt HSACO kernel through the HIP runtime instead of IREE/HSA, so
+// rocprofv3 can profile it apples-to-apples with the HIP backend (a kernel's GPU time is intrinsic to its
+// HSACO, independent of the dispatcher). The HRX kernels are extern "C" __global__ HIP kernels; the kernarg
+// is the standard AMDGPU layout [uint64 binding device-VAs ; constants blob]. Plan: shiny-toasting-truffle.md.
+#define GGML_HRX_HIP_CHECK(expr) do { \
+        hipError_t _hip_err = (expr); \
+        if (_hip_err != hipSuccess) { \
+            GGML_LOG_ERROR("%s:%d: %s -> hip error %d (%s)\n", __FILE__, __LINE__, #expr, \
+                           (int) _hip_err, hipGetErrorString(_hip_err)); \
+            return false; \
+        } \
+    } while (0)
+
+struct ggml_hrx_hip_kernel {
+    hipModule_t   module   = nullptr;
+    hipFunction_t function = nullptr;
+};
+
+static std::mutex                                 g_hrx_hip_mu;
+static std::map<std::string, ggml_hrx_hip_kernel> g_hrx_hip_kernels;   // kernel name -> loaded HIP module/fn
+static hipStream_t                                g_hrx_hip_stream = nullptr;
+static bool                                       g_hrx_hip_inited = false;
+static std::atomic<uint64_t>                      g_hrx_hip_launches{0}; // total kernels launched via HIP (proof + coverage)
+
+// Lazily bind the HIP device + create the dispatch stream. Idempotent, mutex-guarded; callable from both the
+// kernel loader and the pure-HIP buffer allocator (which may run before the first dispatch).
+static bool ggml_backend_hrx_hip_ensure_init() {
+    std::lock_guard<std::mutex> lock(g_hrx_hip_mu);
+    if (g_hrx_hip_inited) { return true; }
+    GGML_HRX_HIP_CHECK(hipSetDevice(0));   // single W7900; a multi-GPU build would match the HRX device by PCI bus id
+    GGML_HRX_HIP_CHECK(hipStreamCreateWithFlags(&g_hrx_hip_stream, hipStreamNonBlocking));
+    g_hrx_hip_inited = true;
+    return true;
+}
+
+// Drain queued kernels then run a synchronous copy/memset. Used by the pure-HIP buffer transfers so a host
+// read/write or a device copy is ordered after any kernel that produced or consumes the region.
+static bool ggml_backend_hrx_hip_copy(void * dst, const void * src, size_t size, hipMemcpyKind kind) {
+    if (g_hrx_hip_inited && g_hrx_hip_stream) { GGML_HRX_HIP_CHECK(hipStreamSynchronize(g_hrx_hip_stream)); }
+    GGML_HRX_HIP_CHECK(hipMemcpy(dst, src, size, kind));
+    return true;
+}
+static bool ggml_backend_hrx_hip_memset(void * dst, int value, size_t size) {
+    if (g_hrx_hip_inited && g_hrx_hip_stream) { GGML_HRX_HIP_CHECK(hipStreamSynchronize(g_hrx_hip_stream)); }
+    GGML_HRX_HIP_CHECK(hipMemset(dst, value, size));
+    return true;
+}
+
+static bool ggml_backend_hrx_hip_get_kernel(const std::string & name, ggml_hrx_hip_kernel * out) {
+    if (!ggml_backend_hrx_hip_ensure_init()) { return false; }
+    std::lock_guard<std::mutex> lock(g_hrx_hip_mu);
+    auto it = g_hrx_hip_kernels.find(name);
+    if (it != g_hrx_hip_kernels.end()) { *out = it->second; return true; }
+
+    const ggml_hrx_kernel_entry * entry = ggml_hrx_kernel_catalog_find(name.c_str(), "gfx1100");
+    if (!entry || !entry->data || entry->data_size == 0) {
+        GGML_LOG_ERROR("HRX HIP-dispatch: no catalog HSACO for kernel '%s'\n", name.c_str());
+        return false;
+    }
+    ggml_hrx_hip_kernel k;
+    GGML_HRX_HIP_CHECK(hipModuleLoadData(&k.module, entry->data));
+    GGML_HRX_HIP_CHECK(hipModuleGetFunction(&k.function, k.module, entry->name));
+    g_hrx_hip_kernels[name] = k;
+    *out = k;
+    return true;
+}
+
+// Launch one HRX kernel through HIP, async on g_hrx_hip_stream. Returns false (and logs) on any HIP error.
+static bool ggml_backend_hrx_hip_dispatch(
+        const std::string & name,
+        const hrx_dispatch_config_t * config,
+        const void * constants, size_t constants_size,
+        const hrx_buffer_ref_t * bindings, size_t binding_count) {
+    ggml_hrx_hip_kernel k;
+    if (!ggml_backend_hrx_hip_get_kernel(name, &k)) { return false; }
+
+    // kernarg = [ uint64 binding device-VAs ][ constants blob ] — byte-identical to IREE's HAL kernarg layout.
+    // In pure-HIP buffer mode each binding's .buffer holds the hipMalloc device VA (reinterpreted as a handle
+    // by tensor_buffer_ref / the scratch allocators), so the VA is base + offset with no runtime resolution.
+    std::vector<uint8_t> kernarg(binding_count * sizeof(uint64_t) + constants_size, 0);
+    for (size_t i = 0; i < binding_count; ++i) {
+        const uint64_t va = reinterpret_cast<uint64_t>(bindings[i].buffer) + bindings[i].offset;
+        std::memcpy(kernarg.data() + i * sizeof(uint64_t), &va, sizeof(uint64_t));
+    }
+    if (constants_size > 0) {
+        std::memcpy(kernarg.data() + binding_count * sizeof(uint64_t), constants, constants_size);
+    }
+
+    size_t kernarg_size = kernarg.size();
+    void * launch_extra[] = {
+        HIP_LAUNCH_PARAM_BUFFER_POINTER, kernarg.data(),
+        HIP_LAUNCH_PARAM_BUFFER_SIZE,    &kernarg_size,
+        HIP_LAUNCH_PARAM_END,
+    };
+    GGML_HRX_HIP_CHECK(hipModuleLaunchKernel(
+        k.function,
+        config->workgroup_count[0], config->workgroup_count[1], config->workgroup_count[2],
+        config->workgroup_size[0],  config->workgroup_size[1],  config->workgroup_size[2],
+        /*sharedMemBytes=*/0, g_hrx_hip_stream, /*kernelParams=*/nullptr, launch_extra));
+    if (g_hrx_hip_launches.fetch_add(1, std::memory_order_relaxed) == 0) {
+        GGML_LOG_INFO("[HRX] HIP-dispatch active — first kernel '%s' launched via hipModuleLaunchKernel "
+                      "(grid=%u,%u,%u block=%u,%u,%u bindings=%zu constants=%zuB)\n",
+                      name.c_str(),
+                      config->workgroup_count[0], config->workgroup_count[1], config->workgroup_count[2],
+                      config->workgroup_size[0],  config->workgroup_size[1],  config->workgroup_size[2],
+                      binding_count, constants_size);
+    }
+    return true;
+}
+#undef GGML_HRX_HIP_CHECK
+#endif // GGML_HRX_HAVE_HIP
+
+// P058: drain the async HIP-dispatch stream. No-op unless HIP-dispatch mode launched at least one kernel
+// (so the stream exists). This is the single point where HRX, after queuing kernels async on the HIP stream,
+// waits for them -- wired into the .synchronize iface and sync_streams (host transfers) below. Compiles to a
+// no-op when HIP support is absent.
+static void ggml_backend_hrx_hip_stream_sync() {
+#ifdef GGML_HRX_HAVE_HIP
+    if (g_hrx_hip_inited && g_hrx_hip_stream) {
+        const hipError_t se = hipStreamSynchronize(g_hrx_hip_stream);
+        if (se != hipSuccess) {
+            GGML_LOG_ERROR("HRX HIP-dispatch: stream sync -> hip error %d (%s)\n",
+                           (int) se, hipGetErrorString(se));
+        }
+    }
+#endif
+}
+
+// ---- P058 pure-HIP buffer mode (GGML_HRX_DISPATCH_VIA_HIP) -----------------------------------------------
+// When enabled, the HRX backend's device buffers are hipMalloc'd and host<->device copies use hipMemcpy, so
+// the HIP-launched kernels run entirely on the HIP runtime against stable HIP device VAs -- no IREE/HSA buffer
+// or cross-runtime stream is involved (which is what wedged the GPU when HIP kernels read IREE transient VAs).
+// The hipMalloc VA is stored in the hrx_buffer_t slot (reinterpreted) and in the buffer context's base; the
+// HIP dispatch and tensor_buffer_ref read it back as a plain VA. Off => unchanged IREE/HSA behaviour.
+static bool ggml_backend_hrx_hip_buffers_enabled() {
+#ifdef GGML_HRX_HAVE_HIP
+    static const bool enabled = ggml_backend_hrx_env_enabled("GGML_HRX_DISPATCH_VIA_HIP");
+    return enabled;
+#else
+    return false;
+#endif
+}
+
+// Allocate a device-local buffer: hipMalloc (VA reinterpreted as an hrx_buffer_t handle) in HIP-buffer mode,
+// else the normal HRX allocator. Returns false (logged) on failure.
+static bool ggml_backend_hrx_device_buffer_alloc(ggml_backend_hrx_device_context * device_context,
+                                                 size_t size, hrx_buffer_t * out_buffer) {
+#ifdef GGML_HRX_HAVE_HIP
+    if (ggml_backend_hrx_hip_buffers_enabled()) {
+        if (!ggml_backend_hrx_hip_ensure_init()) { return false; }
+        void * ptr = nullptr;
+        const hipError_t e = hipMalloc(&ptr, size);
+        if (e != hipSuccess) {
+            GGML_LOG_ERROR("HRX HIP-buffer: hipMalloc(%zu) -> hip error %d (%s)\n",
+                           size, (int) e, hipGetErrorString(e));
+            return false;
+        }
+        *out_buffer = reinterpret_cast<hrx_buffer_t>(ptr);
+        return true;
+    }
+#endif
+    hrx_buffer_params_t params = {
+        /* .type           = */ HRX_MEMORY_TYPE_DEVICE_LOCAL,
+        /* .access         = */ HRX_MEMORY_ACCESS_ALL,
+        /* .usage          = */ HRX_BUFFER_USAGE_DEFAULT,
+        /* .queue_affinity = */ 0,
+    };
+    return GGML_HRX_CHECK(hrx_allocator_allocate_buffer(
+        hrx_device_allocator(device_context->device), params, size, out_buffer));
+}
+
+// Free a buffer obtained from ggml_backend_hrx_device_buffer_alloc.
+static void ggml_backend_hrx_device_buffer_free(hrx_buffer_t buffer) {
+    if (!buffer) { return; }
+#ifdef GGML_HRX_HAVE_HIP
+    if (ggml_backend_hrx_hip_buffers_enabled()) {
+        (void) hipFree(reinterpret_cast<void *>(buffer));
+        return;
+    }
+#endif
+    hrx_buffer_release(buffer);
+}
+
 static hrx_status_t ggml_backend_hrx_stream_dispatch(
         hrx_stream_t stream,
         hrx_executable_t executable,
@@ -1651,6 +1846,24 @@ static hrx_status_t ggml_backend_hrx_stream_dispatch(
         const hrx_buffer_ref_t * bindings,
         size_t binding_count,
         uint32_t flags) {
+#ifdef GGML_HRX_HAVE_HIP
+    // P058 pure-HIP mode (GGML_HRX_DISPATCH_VIA_HIP): buffers are hipMalloc'd (see device_buffer_alloc) and
+    // every kernel launches through the HIP runtime, so rocprofv3 can profile it apples-to-apples with the HIP
+    // backend. There is NO IREE fallback -- the bindings are HIP device VAs the IREE path cannot consume -- so
+    // a launch failure (e.g. an op with no catalog HSACO, or a kernarg-size mismatch) is a hard error.
+    if (ggml_backend_hrx_hip_buffers_enabled()) {
+        const std::string name = ggml_backend_hrx_lookup_kernel_name(executable, export_ordinal);
+        if (!ggml_backend_hrx_hip_dispatch(name, config, constants, constants_size, bindings, binding_count)) {
+            GGML_LOG_ERROR("HRX HIP-dispatch: kernel '%s' could not launch via HIP (no IREE fallback in "
+                           "HIP-buffer mode)\n", name.c_str());
+            return hrx_make_status(HRX_STATUS_INTERNAL, "HRX HIP-dispatch: kernel launch failed");
+        }
+        // Async: queued on g_hrx_hip_stream, ordered (same stream) against the other HIP dispatches; drained at
+        // the .synchronize iface and in sync_streams (host transfers) via ggml_backend_hrx_hip_stream_sync().
+        // hipModuleLaunchKernel consumes the kernarg buffer synchronously, so the local vector is safe to free.
+        return hrx_ok_status();
+    }
+#endif
     const bool   trace = ggml_trace::hrx_enabled();
     const double t0    = trace ? ggml_trace::now_us() : 0.0;
     hrx_status_t status = hrx_stream_dispatch(
@@ -1786,7 +1999,7 @@ static void ggml_backend_hrx_recycle_scratch_buffers(ggml_backend_hrx_context * 
 static void ggml_backend_hrx_release_scratch_buffers(ggml_backend_hrx_context * context) {
     for (ggml_backend_hrx_scratch_buffer & scratch : context->scratch_buffers) {
         if (scratch.buffer) {
-            hrx_buffer_release(scratch.buffer);
+            ggml_backend_hrx_device_buffer_free(scratch.buffer);
             scratch.buffer = nullptr;
         }
         scratch.size = 0;
@@ -1797,23 +2010,23 @@ static void ggml_backend_hrx_release_scratch_buffers(ggml_backend_hrx_context * 
 
 static void ggml_backend_hrx_release_retired_persistent_scratch_buffers(ggml_backend_hrx_context * context) {
     for (hrx_buffer_t buffer : context->retired_scratch_q8_1) {
-        hrx_buffer_release(buffer);
+        ggml_backend_hrx_device_buffer_free(buffer);
     }
     context->retired_scratch_q8_1.clear();
     for (hrx_buffer_t buffer : context->retired_scratch_routes) {
-        hrx_buffer_release(buffer);
+        ggml_backend_hrx_device_buffer_free(buffer);
     }
     context->retired_scratch_routes.clear();
 }
 
 static void ggml_backend_hrx_release_persistent_scratch_buffers(ggml_backend_hrx_context * context) {
     if (context->scratch_q8_1) {
-        hrx_buffer_release(context->scratch_q8_1);
+        ggml_backend_hrx_device_buffer_free(context->scratch_q8_1);
         context->scratch_q8_1 = nullptr;
         context->scratch_q8_1_size = 0;
     }
     if (context->scratch_routes) {
-        hrx_buffer_release(context->scratch_routes);
+        ggml_backend_hrx_device_buffer_free(context->scratch_routes);
         context->scratch_routes = nullptr;
         context->scratch_routes_size = 0;
     }
@@ -1837,17 +2050,7 @@ static bool ggml_backend_hrx_ensure_persistent_scratch_buffer(
             *buffer = nullptr;
             *buffer_size = 0;
         }
-        hrx_buffer_params_t params = {
-            /* .type           = */ HRX_MEMORY_TYPE_DEVICE_LOCAL,
-            /* .access         = */ HRX_MEMORY_ACCESS_ALL,
-            /* .usage          = */ HRX_BUFFER_USAGE_DEFAULT,
-            /* .queue_affinity = */ 0,
-        };
-        if (!GGML_HRX_CHECK(hrx_allocator_allocate_buffer(
-                hrx_device_allocator(context->device_context->device),
-                params,
-                size,
-                buffer))) {
+        if (!ggml_backend_hrx_device_buffer_alloc(context->device_context, size, buffer)) {
             return false;
         }
         *buffer_size = size;
@@ -1908,18 +2111,8 @@ static bool ggml_backend_hrx_request_scratch_buffer(
     }
 
     if (!selected) {
-        hrx_buffer_params_t params = {
-            /* .type           = */ HRX_MEMORY_TYPE_DEVICE_LOCAL,
-            /* .access         = */ HRX_MEMORY_ACCESS_ALL,
-            /* .usage          = */ HRX_BUFFER_USAGE_DEFAULT,
-            /* .queue_affinity = */ 0,
-        };
         hrx_buffer_t buffer = nullptr;
-        if (!GGML_HRX_CHECK(hrx_allocator_allocate_buffer(
-                hrx_device_allocator(context->device_context->device),
-                params,
-                size,
-                &buffer))) {
+        if (!ggml_backend_hrx_device_buffer_alloc(context->device_context, size, &buffer)) {
             return false;
         }
         context->scratch_buffers.push_back({
@@ -2032,6 +2225,8 @@ static bool ggml_backend_hrx_sync_streams(ggml_backend_hrx_device_context * devi
     if (!device_context) {
         return true;
     }
+
+    ggml_backend_hrx_hip_stream_sync();  // P058: drain async HIP-dispatch kernels before host transfers proceed
 
     std::lock_guard<std::mutex> lock(device_context->streams_mutex);
     bool ok = true;
@@ -3110,6 +3305,12 @@ static bool ggml_backend_hrx_load_flash_attn_ext_providers(ggml_backend_hrx_devi
         device_context, "hrx_flash_attn_ext_f32_f16_decode_gqa8_reduce",
         &device_context->flash_attn_ext_f16_decode_gqa8_reduce_provider) || ok;
     ok = ggml_backend_hrx_load_catalog_provider(
+        device_context, "hrx_flash_attn_ext_f32_f16_decode_split",
+        &device_context->flash_attn_ext_f16_decode_split_provider) || ok;
+    ok = ggml_backend_hrx_load_catalog_provider(
+        device_context, "hrx_flash_attn_ext_f32_f16_decode_combine",
+        &device_context->flash_attn_ext_f16_decode_combine_provider) || ok;
+    ok = ggml_backend_hrx_load_catalog_provider(
         device_context, "hrx_flash_attn_ext_f32_f16_prefill_tile8",
         &device_context->flash_attn_ext_f16_prefill_tile_provider) || ok;
     ok = ggml_backend_hrx_load_catalog_provider(
@@ -3186,6 +3387,10 @@ static bool ggml_backend_hrx_load_rope_f32_provider(ggml_backend_hrx_device_cont
     return ggml_backend_hrx_load_catalog_provider(device_context, "hrx_rope_f32", &device_context->rope_f32_provider);
 }
 
+static bool ggml_backend_hrx_load_rope_norm_f32_provider(ggml_backend_hrx_device_context * device_context) {
+    return ggml_backend_hrx_load_catalog_provider(device_context, "hrx_rope_norm_f32", &device_context->rope_norm_f32_provider);
+}
+
 static bool ggml_backend_hrx_load_rope_set_rows_f32_f16_provider(
         ggml_backend_hrx_device_context * device_context) {
     return ggml_backend_hrx_load_catalog_provider(
@@ -3244,9 +3449,7 @@ static const char * ggml_backend_hrx_buffer_type_get_name(ggml_backend_buffer_ty
 
 static void ggml_backend_hrx_buffer_free_buffer(ggml_backend_buffer_t buffer) {
     auto * context = ggml_backend_hrx_get_buffer_context(buffer);
-    if (context->buffer) {
-        hrx_buffer_release(context->buffer);
-    }
+    ggml_backend_hrx_device_buffer_free(context->buffer);  // hipFree (HIP-buffer mode) or hrx_buffer_release
     delete context;
 }
 
@@ -3260,7 +3463,13 @@ static void ggml_backend_hrx_buffer_memset_tensor(
     if (size == 0 || !context->buffer) {
         return;
     }
-
+#ifdef GGML_HRX_HAVE_HIP
+    if (ggml_backend_hrx_hip_buffers_enabled()) {
+        const size_t off = ggml_backend_hrx_tensor_offset(context, tensor) + offset;
+        ggml_backend_hrx_hip_memset(context->base + off, value, size);
+        return;
+    }
+#endif
     if (!ggml_backend_hrx_sync_streams(context->device_context)) {
         return;
     }
@@ -3276,7 +3485,15 @@ static void ggml_backend_hrx_buffer_set_tensor(
     if (size == 0 || !context->buffer) {
         return;
     }
-
+#ifdef GGML_HRX_HAVE_HIP
+    if (ggml_backend_hrx_hip_buffers_enabled()) {
+        const size_t off = ggml_backend_hrx_tensor_offset(context, tensor) + offset;
+        if (!ggml_backend_hrx_hip_copy(context->base + off, data, size, hipMemcpyHostToDevice)) {
+            GGML_LOG_ERROR("%s: failed to upload tensor %s via hipMemcpy\n", __func__, tensor->name);
+        }
+        return;
+    }
+#endif
     const size_t buffer_offset = ggml_backend_hrx_tensor_offset(context, tensor) + offset;
     if (!ggml_backend_hrx_stage_and_copy_tensor(context, tensor, data, buffer_offset, buffer->size, size)) {
         GGML_LOG_ERROR("%s: failed to upload tensor %s through HRX staging\n", __func__, tensor->name);
@@ -3289,7 +3506,15 @@ static void ggml_backend_hrx_buffer_get_tensor(
     if (size == 0 || !context->buffer) {
         return;
     }
-
+#ifdef GGML_HRX_HAVE_HIP
+    if (ggml_backend_hrx_hip_buffers_enabled()) {
+        const size_t off = ggml_backend_hrx_tensor_offset(context, tensor) + offset;
+        if (!ggml_backend_hrx_hip_copy(data, context->base + off, size, hipMemcpyDeviceToHost)) {
+            GGML_LOG_ERROR("%s: failed to read tensor %s via hipMemcpy\n", __func__, tensor->name);
+        }
+        return;
+    }
+#endif
     const size_t buffer_offset = ggml_backend_hrx_tensor_offset(context, tensor) + offset;
     if (!ggml_backend_hrx_copy_tensor_to_staging(
             context, tensor, buffer_offset, buffer->size, data, size, "get_tensor")) {
@@ -3311,13 +3536,19 @@ static bool ggml_backend_hrx_buffer_cpy_tensor(
         return false;
     }
 
+    const size_t src_offset = ggml_backend_hrx_tensor_offset(src_context, src);
+    const size_t dst_offset = ggml_backend_hrx_tensor_offset(dst_context, dst);
+    const size_t size = ggml_nbytes(src);
+#ifdef GGML_HRX_HAVE_HIP
+    if (ggml_backend_hrx_hip_buffers_enabled()) {
+        return ggml_backend_hrx_hip_copy(
+            dst_context->base + dst_offset, src_context->base + src_offset, size, hipMemcpyDeviceToDevice);
+    }
+#endif
     if (!ggml_backend_hrx_sync_streams(dst_context->device_context)) {
         return false;
     }
 
-    const size_t src_offset = ggml_backend_hrx_tensor_offset(src_context, src);
-    const size_t dst_offset = ggml_backend_hrx_tensor_offset(dst_context, dst);
-    const size_t size = ggml_nbytes(src);
     return ggml_backend_hrx_queue_copy_stream_sync(
         dst_context->device_context,
         src_context->buffer, src_offset,
@@ -3330,7 +3561,12 @@ static void ggml_backend_hrx_buffer_clear(ggml_backend_buffer_t buffer, uint8_t 
     if (buffer->size == 0 || !context->buffer) {
         return;
     }
-
+#ifdef GGML_HRX_HAVE_HIP
+    if (ggml_backend_hrx_hip_buffers_enabled()) {
+        ggml_backend_hrx_hip_memset(context->base, value, buffer->size);
+        return;
+    }
+#endif
     if (!ggml_backend_hrx_sync_streams(context->device_context)) {
         return;
     }
@@ -3354,33 +3590,39 @@ static const ggml_backend_buffer_i ggml_backend_hrx_buffer_i = {
 static ggml_backend_buffer_t ggml_backend_hrx_buffer_type_alloc_buffer(
         ggml_backend_buffer_type_t buft, size_t size) {
     auto * buft_context = ggml_backend_hrx_get_buft_context(buft);
+    const bool hip = ggml_backend_hrx_hip_buffers_enabled();
 
     hrx_buffer_t hrx_buffer = nullptr;
-    if (size > 0 &&
-        !GGML_HRX_CHECK(hrx_allocator_allocate_buffer(
-            hrx_device_allocator(buft_context->device_context->device),
-            buft_context->params, size, &hrx_buffer))) {
-        return nullptr;
+    if (size > 0) {
+        if (hip) {
+            // Pure-HIP buffer: hipMalloc (uniform device-buffer path); buffer holds the VA reinterpreted.
+            if (!ggml_backend_hrx_device_buffer_alloc(buft_context->device_context, size, &hrx_buffer)) {
+                return nullptr;
+            }
+        } else if (!GGML_HRX_CHECK(hrx_allocator_allocate_buffer(
+                       hrx_device_allocator(buft_context->device_context->device),
+                       buft_context->params, size, &hrx_buffer))) {
+            return nullptr;
+        }
     }
 
+    // In HIP mode `base` is the real hipMalloc VA so get_base/tensor->data are genuine device pointers; in the
+    // normal path it stays the sentinel (tensors carry an HRX buffer handle + offset, not a raw pointer).
     auto * context = new (std::nothrow) ggml_backend_hrx_buffer_context {
         /* .device_context = */ buft_context->device_context,
         /* .buffer         = */ hrx_buffer,
-        /* .base           = */ reinterpret_cast<uint8_t *>(GGML_HRX_FAKE_PTR_BASE),
+        /* .base           = */ hip ? reinterpret_cast<uint8_t *>(hrx_buffer)
+                                     : reinterpret_cast<uint8_t *>(GGML_HRX_FAKE_PTR_BASE),
     };
     if (!context) {
-        if (hrx_buffer) {
-            hrx_buffer_release(hrx_buffer);
-        }
+        ggml_backend_hrx_device_buffer_free(hrx_buffer);
         return nullptr;
     }
 
     ggml_backend_buffer_t buffer = ggml_backend_buffer_init(
         buft, ggml_backend_hrx_buffer_i, context, size);
     if (!buffer) {
-        if (context->buffer) {
-            hrx_buffer_release(context->buffer);
-        }
+        ggml_backend_hrx_device_buffer_free(context->buffer);
         delete context;
     }
     return buffer;
@@ -3460,6 +3702,7 @@ static void ggml_backend_hrx_free(ggml_backend_t backend) {
 
 static void ggml_backend_hrx_synchronize(ggml_backend_t backend) {
     auto * context = static_cast<ggml_backend_hrx_context *>(backend->context);
+    ggml_backend_hrx_hip_stream_sync();  // P058: drain async HIP-dispatch kernels at the graph/sync boundary
     if (context->stream) {
         GGML_HRX_CHECK(hrx_stream_synchronize(context->stream));
         ggml_backend_hrx_recycle_scratch_buffers(context);
@@ -6033,6 +6276,62 @@ static bool ggml_backend_hrx_supports_flash_attn_ext_f32_f16_decode_gqa8(
            ggml_is_contiguous(op);
 }
 
+// P058: split-K decode FA for head-dim 128 (Llama-3.x), GQA-agnostic. The gqa8 split-K above is hardcoded to
+// head-dim 256 / GQA-8, so Llama (D=128, GQA-4) fell back to the slow single kernel. This routes it to the
+// hrx_flash_attn_ext_f32_f16_decode_split + _combine pair (parallel over the KV length).
+static bool ggml_backend_hrx_supports_flash_attn_ext_f32_f16_decode_split(
+        const ggml_backend_hrx_device_context * device_context,
+        const ggml_tensor * op) {
+    if (ggml_backend_hrx_approximate_kernels_disabled() ||
+        ggml_backend_hrx_env_enabled("GGML_HRX_DISABLE_F16_DECODE_FA_SPLIT") ||
+        device_context->flash_attn_ext_f16_decode_split_provider.kind != ggml_backend_hrx_provider_kind::hsaco ||
+        device_context->flash_attn_ext_f16_decode_combine_provider.kind != ggml_backend_hrx_provider_kind::hsaco) {
+        return false;
+    }
+
+    const ggml_tensor * q = op->src[0];
+    const ggml_tensor * k = op->src[1];
+    const ggml_tensor * v = op->src[2];
+    const ggml_tensor * mask = op->src[3];
+    const ggml_tensor * sinks = op->src[4];
+    if (!q || !k || !v) {
+        return false;
+    }
+
+    return
+           q->type == GGML_TYPE_F32 &&
+           k->type == GGML_TYPE_F16 &&
+           v->type == GGML_TYPE_F16 &&
+           op->type == GGML_TYPE_F32 &&
+           (!mask || mask->type == GGML_TYPE_F16) &&
+           (!sinks || (sinks->type == GGML_TYPE_F32 && sinks->ne[0] == q->ne[2])) &&
+           q->ne[0] == 128 &&
+           k->ne[0] == 128 &&
+           v->ne[0] == 128 &&
+           op->ne[0] == 128 &&
+           q->ne[1] == 1 &&
+           k->ne[1] > 0 &&
+           k->ne[1] <= 1024 &&
+           k->ne[1] == v->ne[1] &&
+           q->ne[2] > 0 &&
+           k->ne[2] > 0 &&
+           q->ne[2] == op->ne[1] &&
+           q->ne[1] == op->ne[2] &&
+           q->ne[3] == op->ne[3] &&
+           k->ne[2] == v->ne[2] &&
+           q->ne[3] == k->ne[3] &&
+           q->ne[3] == v->ne[3] &&
+           q->ne[2] % k->ne[2] == 0 &&
+           (!mask || (mask->ne[0] >= k->ne[1] && mask->ne[1] >= q->ne[1] &&
+                      mask->ne[2] <= 1 && mask->ne[3] == q->ne[3])) &&
+           q->nb[0] == sizeof(float) &&
+           k->nb[0] == ggml_type_size(k->type) &&
+           v->nb[0] == ggml_type_size(v->type) &&
+           (!mask || mask->nb[0] == ggml_type_size(mask->type)) &&
+           op->nb[0] == sizeof(float) &&
+           ggml_is_contiguous(op);
+}
+
 static bool ggml_backend_hrx_supports_flash_attn_ext_f32_decode(
         const ggml_backend_hrx_device_context * device_context,
         const ggml_tensor * op) {
@@ -6050,6 +6349,7 @@ static bool ggml_backend_hrx_supports_flash_attn_ext_f32_decode(
     }
 
     if (ggml_backend_hrx_supports_flash_attn_ext_f32_f16_decode_gqa8(device_context, op) ||
+        ggml_backend_hrx_supports_flash_attn_ext_f32_f16_decode_split(device_context, op) ||
         ggml_backend_hrx_supports_flash_attn_ext_f32_f16_prefill_direct(device_context, op) ||
         ggml_backend_hrx_supports_flash_attn_ext_f32_f16_prefill_wmma(device_context, op) ||
         ggml_backend_hrx_supports_flash_attn_ext_f32_f16_prefill_tile(device_context, op)) {
@@ -6362,6 +6662,43 @@ static bool ggml_backend_hrx_supports_rope_f32(
            src1->ne[0] == src0->ne[2] * 4 &&
            ggml_is_contiguous(src0) &&
            ggml_is_contiguous(src1) &&
+           ggml_is_contiguous(op) &&
+           ggml_are_same_shape(src0, op);
+}
+
+// P058: NORMAL-mode (adjacent-pair) rope with llama3 freq_factors (src2) and one position per token, as used
+// by Llama-3.x. The IMROPE kernel above does not apply; ggml_backend_hrx_dispatch_rope_norm_f32 launches the
+// dedicated hrx_rope_norm_f32 kernel. ext_factor==0 (no YaRN); freq_scale/attn_factor handled in the kernel.
+static bool ggml_backend_hrx_supports_rope_norm_f32(
+        const ggml_backend_hrx_device_context * device_context,
+        const ggml_tensor * op) {
+    const ggml_tensor * src0 = op->src[0];
+    const ggml_tensor * src1 = op->src[1];
+    const ggml_tensor * src2 = op->src[2];
+    float ext_factor = 0.0f;
+    std::memcpy(&ext_factor, reinterpret_cast<const int32_t *>(op->op_params) + 7, sizeof(float));
+    const int32_t n_dims = ggml_get_op_params_i32(op, 1);
+    const int32_t mode = ggml_get_op_params_i32(op, 2);
+    return !ggml_backend_hrx_approximate_kernels_disabled() &&
+           device_context->rope_norm_f32_provider.kind == ggml_backend_hrx_provider_kind::hsaco &&
+           src0 &&
+           src1 &&
+           src2 &&                                  // llama3 freq_factors required (v1)
+           src0->type == GGML_TYPE_F32 &&
+           src1->type == GGML_TYPE_I32 &&
+           src2->type == GGML_TYPE_F32 &&
+           op->type == GGML_TYPE_F32 &&
+           mode == GGML_ROPE_TYPE_NORMAL &&
+           ext_factor == 0.0f &&
+           n_dims > 0 &&
+           n_dims <= src0->ne[0] &&
+           (n_dims % 2) == 0 &&
+           (src0->ne[0] % 2) == 0 &&
+           src2->ne[0] == n_dims / 2 &&             // freq_factors length = n_dims/2
+           src1->ne[0] == src0->ne[2] &&            // one position per token
+           ggml_is_contiguous(src0) &&
+           ggml_is_contiguous(src1) &&
+           ggml_is_contiguous(src2) &&
            ggml_is_contiguous(op) &&
            ggml_are_same_shape(src0, op);
 }
@@ -9652,11 +9989,13 @@ static ggml_status ggml_backend_hrx_dispatch_flash_attn_ext_f32_decode(
 
     const bool use_decode_gqa8 =
         ggml_backend_hrx_supports_flash_attn_ext_f32_f16_decode_gqa8(context->device_context, op);
-    const bool use_prefill_direct = !use_decode_gqa8 &&
+    const bool use_decode_split = !use_decode_gqa8 &&
+        ggml_backend_hrx_supports_flash_attn_ext_f32_f16_decode_split(context->device_context, op);
+    const bool use_prefill_direct = !use_decode_gqa8 && !use_decode_split &&
         ggml_backend_hrx_supports_flash_attn_ext_f32_f16_prefill_direct(context->device_context, op);
-    const bool use_prefill_wmma = !use_decode_gqa8 && !use_prefill_direct &&
+    const bool use_prefill_wmma = !use_decode_gqa8 && !use_decode_split && !use_prefill_direct &&
         ggml_backend_hrx_supports_flash_attn_ext_f32_f16_prefill_wmma(context->device_context, op);
-    const bool use_prefill_tile = !use_decode_gqa8 && !use_prefill_direct && !use_prefill_wmma &&
+    const bool use_prefill_tile = !use_decode_gqa8 && !use_decode_split && !use_prefill_direct && !use_prefill_wmma &&
         ggml_backend_hrx_supports_flash_attn_ext_f32_f16_prefill_tile(context->device_context, op);
     const ggml_backend_hrx_op_provider * provider =
         use_decode_gqa8 ? &context->device_context->flash_attn_ext_f16_decode_gqa8_split_provider :
@@ -9716,6 +10055,64 @@ static ggml_status ggml_backend_hrx_dispatch_flash_attn_ext_f32_decode(
         if (!GGML_HRX_CHECK(hrx_stream_dispatch(
                 context->stream, reduce_provider.executable, reduce_provider.export_ordinal, &reduce_config,
                 &constants, sizeof(constants), reduce_bindings, 3, HRX_DISPATCH_FLAG_NONE))) {
+            return GGML_STATUS_FAILED;
+        }
+        return GGML_STATUS_SUCCESS;
+    }
+
+    if (use_decode_split) {
+        // P058 split-K decode FA (head-dim 128, GQA-agnostic): N_SPLIT partials over the KV length, then a
+        // combine. Same scratch layout + 2-dispatch shape as the gqa8 path; grid x-dim is H*N_SPLIT (one query
+        // head per workgroup) vs gqa8's H_KV*SPLITS. N_SPLIT must match the kernels' constexpr.
+        static constexpr uint32_t fa_split_count = 8;
+        const size_t partial_count = static_cast<size_t>(constants.S) *
+            static_cast<size_t>(constants.N) *
+            static_cast<size_t>(constants.H) *
+            fa_split_count;
+        const size_t scratch_size = partial_count *
+            (static_cast<size_t>(constants.D) + 2) *
+            sizeof(float);
+        if (!ggml_backend_hrx_request_scratch_buffer(context, scratch_size, &bindings[6])) {
+            GGML_LOG_ERROR("%s: failed to allocate FLASH_ATTN_EXT split scratch\n", __func__);
+            return GGML_STATUS_FAILED;
+        }
+
+        const auto & split_provider = context->device_context->flash_attn_ext_f16_decode_split_provider;
+        const uint32_t split_workgroup_size = split_provider.export_info.workgroup_size[0] ?
+            split_provider.export_info.workgroup_size[0] : 128;
+        // Vectorized split kernel: one workgroup per (kv_head, split); its 4 wavefronts process the GQA query
+        // heads of that kv_head (grid x = H_KV * SPLITS, not H * SPLITS).
+        hrx_dispatch_config_t split_config = {
+            /* .workgroup_count = */ {
+                static_cast<uint32_t>(constants.H_KV * fa_split_count),
+                static_cast<uint32_t>(constants.N),
+                static_cast<uint32_t>(constants.S),
+            },
+            /* .workgroup_size = */ { split_workgroup_size, 1, 1 },
+            /* .subgroup_size = */ 0,
+        };
+        if (!GGML_HRX_CHECK(hrx_stream_dispatch(
+                context->stream, split_provider.executable, split_provider.export_ordinal, &split_config,
+                &constants, sizeof(constants), bindings, 7, HRX_DISPATCH_FLAG_NONE))) {
+            return GGML_STATUS_FAILED;
+        }
+
+        hrx_buffer_ref_t combine_bindings[3] = { bindings[6], bindings[4], bindings[5] };
+        const auto & combine_provider = context->device_context->flash_attn_ext_f16_decode_combine_provider;
+        const uint32_t combine_workgroup_size = combine_provider.export_info.workgroup_size[0] ?
+            combine_provider.export_info.workgroup_size[0] : 256;
+        hrx_dispatch_config_t combine_config = {
+            /* .workgroup_count = */ {
+                static_cast<uint32_t>(constants.H),
+                static_cast<uint32_t>(constants.N),
+                static_cast<uint32_t>(constants.S),
+            },
+            /* .workgroup_size = */ { combine_workgroup_size, 1, 1 },
+            /* .subgroup_size = */ 0,
+        };
+        if (!GGML_HRX_CHECK(hrx_stream_dispatch(
+                context->stream, combine_provider.executable, combine_provider.export_ordinal, &combine_config,
+                &constants, sizeof(constants), combine_bindings, 3, HRX_DISPATCH_FLAG_NONE))) {
             return GGML_STATUS_FAILED;
         }
         return GGML_STATUS_SUCCESS;
@@ -10012,6 +10409,76 @@ static ggml_status ggml_backend_hrx_dispatch_rope_f32(
     if (!GGML_HRX_CHECK(hrx_stream_dispatch(
             context->stream, provider.executable, provider.export_ordinal, &config,
             &constants, sizeof(constants), bindings, 3, HRX_DISPATCH_FLAG_NONE))) {
+        return GGML_STATUS_FAILED;
+    }
+    return GGML_STATUS_SUCCESS;
+}
+
+// P058: dispatch the NORMAL-mode rope kernel (hrx_rope_norm_f32) for Llama-3.x. Four bindings: src0, pos,
+// freq_factors (src2), dst -- matching the kernel signature. Reuses hrx_rope_f32_constants (sections = 0).
+static ggml_status ggml_backend_hrx_dispatch_rope_norm_f32(
+        ggml_backend_hrx_context * context,
+        const ggml_tensor * dst) {
+    const ggml_tensor * src0 = dst->src[0];
+    const ggml_tensor * src1 = dst->src[1];
+    const ggml_tensor * src2 = dst->src[2];
+    hrx_buffer_ref_t bindings[4] = {};
+    if (!ggml_backend_hrx_tensor_buffer_ref(src0, &bindings[0]) ||
+        !ggml_backend_hrx_tensor_buffer_ref(src1, &bindings[1]) ||
+        !ggml_backend_hrx_tensor_buffer_ref(src2, &bindings[2]) ||
+        !ggml_backend_hrx_tensor_buffer_ref(dst, &bindings[3])) {
+        GGML_LOG_ERROR("%s: ROPE tensor is not backed by a HRX buffer\n", __func__);
+        return GGML_STATUS_FAILED;
+    }
+
+    float freq_base = 0.0f;
+    float freq_scale = 0.0f;
+    float attn_factor = 0.0f;
+    std::memcpy(&freq_base, reinterpret_cast<const int32_t *>(dst->op_params) + 5, sizeof(float));
+    std::memcpy(&freq_scale, reinterpret_cast<const int32_t *>(dst->op_params) + 6, sizeof(float));
+    std::memcpy(&attn_factor, reinterpret_cast<const int32_t *>(dst->op_params) + 8, sizeof(float));
+
+    ggml_backend_hrx_rope_f32_constants constants = {
+        /* .ne00        = */ src0->ne[0],
+        /* .ne01        = */ src0->ne[1],
+        /* .ne02        = */ src0->ne[2],
+        /* .nrows       = */ ggml_nrows(src0),
+        /* .src_s1      = */ static_cast<int64_t>(src0->nb[1] / sizeof(float)),
+        /* .src_s2      = */ static_cast<int64_t>(src0->nb[2] / sizeof(float)),
+        /* .src_s3      = */ static_cast<int64_t>(src0->nb[3] / sizeof(float)),
+        /* .dst_s1      = */ static_cast<int64_t>(dst->nb[1] / sizeof(float)),
+        /* .dst_s2      = */ static_cast<int64_t>(dst->nb[2] / sizeof(float)),
+        /* .dst_s3      = */ static_cast<int64_t>(dst->nb[3] / sizeof(float)),
+        /* .n_dims      = */ ggml_get_op_params_i32(dst, 1),
+        /* .mode        = */ ggml_get_op_params_i32(dst, 2),
+        /* .section0    = */ 0,
+        /* .section1    = */ 0,
+        /* .section2    = */ 0,
+        /* .section3    = */ 0,
+        /* .freq_base   = */ freq_base,
+        /* .freq_scale  = */ freq_scale,
+        /* .attn_factor = */ attn_factor,
+        /* ._pad        = */ 0.0f,
+    };
+
+    const auto & provider = context->device_context->rope_norm_f32_provider;
+    const uint32_t workgroup_size = provider.export_info.workgroup_size[0] ?
+        provider.export_info.workgroup_size[0] : 256;
+    const uint64_t total_pairs =
+        static_cast<uint64_t>(constants.nrows) * static_cast<uint64_t>(constants.ne00 / 2);
+    hrx_dispatch_config_t config = {
+        /* .workgroup_count = */ {
+            static_cast<uint32_t>((total_pairs + workgroup_size - 1) / workgroup_size),
+            1,
+            1,
+        },
+        /* .workgroup_size = */ { workgroup_size, 1, 1 },
+        /* .subgroup_size = */ 0,
+    };
+
+    if (!GGML_HRX_CHECK(hrx_stream_dispatch(
+            context->stream, provider.executable, provider.export_ordinal, &config,
+            &constants, sizeof(constants), bindings, 4, HRX_DISPATCH_FLAG_NONE))) {
         return GGML_STATUS_FAILED;
     }
     return GGML_STATUS_SUCCESS;
@@ -12648,11 +13115,16 @@ static ggml_status ggml_backend_hrx_graph_compute(ggml_backend_t backend, ggml_c
                     GGML_LOG_ERROR("%s: ROPE disabled by GGML_HRX_DISABLE_ROPE\n", __func__);
                     return GGML_STATUS_FAILED;
                 }
-                if (!ggml_backend_hrx_supports_rope_f32(context->device_context, node)) {
+                if (ggml_backend_hrx_supports_rope_f32(context->device_context, node)) {
+                    if (ggml_backend_hrx_dispatch_rope_f32(context, node) != GGML_STATUS_SUCCESS) {
+                        return GGML_STATUS_FAILED;
+                    }
+                } else if (ggml_backend_hrx_supports_rope_norm_f32(context->device_context, node)) {
+                    if (ggml_backend_hrx_dispatch_rope_norm_f32(context, node) != GGML_STATUS_SUCCESS) {
+                        return GGML_STATUS_FAILED;
+                    }
+                } else {
                     GGML_LOG_ERROR("%s: ROPE shape/type/layout is unsupported\n", __func__);
-                    return GGML_STATUS_FAILED;
-                }
-                if (ggml_backend_hrx_dispatch_rope_f32(context, node) != GGML_STATUS_SUCCESS) {
                     return GGML_STATUS_FAILED;
                 }
                 break;
@@ -12880,7 +13352,8 @@ static bool ggml_backend_hrx_device_supports_op(ggml_backend_dev_t dev, const gg
         case GGML_OP_ARGSORT:
             return ggml_backend_hrx_supports_argsort_f32(ggml_backend_hrx_get_device_context(dev), op);
         case GGML_OP_ROPE:
-            return ggml_backend_hrx_supports_rope_f32(ggml_backend_hrx_get_device_context(dev), op);
+            return ggml_backend_hrx_supports_rope_f32(ggml_backend_hrx_get_device_context(dev), op) ||
+                   ggml_backend_hrx_supports_rope_norm_f32(ggml_backend_hrx_get_device_context(dev), op);
         case GGML_OP_UNARY:
             return ggml_backend_hrx_supports_unary_f32(ggml_backend_hrx_get_device_context(dev), op);
         case GGML_OP_GLU:
@@ -13039,6 +13512,7 @@ static std::unique_ptr<ggml_backend_hrx_reg_context> ggml_backend_hrx_create_reg
         (void) ggml_backend_hrx_load_argsort_f32_provider(device_context.get());
         (void) ggml_backend_hrx_load_topk_moe_f32_providers(device_context.get());
         (void) ggml_backend_hrx_load_rope_f32_provider(device_context.get());
+        (void) ggml_backend_hrx_load_rope_norm_f32_provider(device_context.get());
         (void) ggml_backend_hrx_load_rope_set_rows_f32_f16_provider(device_context.get());
         (void) ggml_backend_hrx_load_ssm_conv_provider(device_context.get());
         (void) ggml_backend_hrx_load_ssm_conv_update_provider(device_context.get());

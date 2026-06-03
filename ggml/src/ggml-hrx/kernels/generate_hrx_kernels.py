@@ -296,6 +296,14 @@ KERNELS = [
         "workgroup_size": (256, 1, 1),
     },
     {
+        "name": "hrx_rope_norm_f32",
+        "source": "rope_norm_f32.hip.cpp",
+        "format": None,
+        "binding_count": 4,
+        "constants_size": 120,
+        "workgroup_size": (256, 1, 1),
+    },
+    {
         "name": "hrx_rope_set_rows_f32_f16",
         "source": "rope_set_rows_f32_f16.hip.cpp",
         "format": None,
@@ -1587,6 +1595,22 @@ KERNELS = [
     {
         "name": "hrx_flash_attn_ext_f32_f16_decode_gqa8_reduce",
         "source": "flash_attn_ext_f32_f16_decode_gqa8_reduce.hip.cpp",
+        "format": None,
+        "binding_count": 3,
+        "constants_size": 200,
+        "workgroup_size": (256, 1, 1),
+    },
+    {
+        "name": "hrx_flash_attn_ext_f32_f16_decode_split",
+        "source": "flash_attn_ext_f32_f16_decode_split.hip.cpp",
+        "format": None,
+        "binding_count": 7,
+        "constants_size": 200,
+        "workgroup_size": (128, 1, 1),
+    },
+    {
+        "name": "hrx_flash_attn_ext_f32_f16_decode_combine",
+        "source": "flash_attn_ext_f32_f16_decode_combine.hip.cpp",
         "format": None,
         "binding_count": 3,
         "constants_size": 200,
