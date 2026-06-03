@@ -1750,14 +1750,22 @@ static bool ggml_backend_hrx_hip_ensure_init() {
 
 // Drain queued kernels then run a synchronous copy/memset. Used by the pure-HIP buffer transfers so a host
 // read/write or a device copy is ordered after any kernel that produced or consumes the region.
+// Queue copies/memsets on the SAME stream as the kernels so they are FIFO-ordered against them WITHOUT a host
+// drain. hipMemcpyAsync stages a pageable host buffer synchronously (so a transient src/dst is safe), and the
+// async DMA / memset is ordered on g_hrx_hip_stream against the producing/consuming kernels. Only a device->host
+// readback must block (the host consumes the result immediately after). This replaces the old "full
+// hipStreamSynchronize + synchronous default-stream hipMemcpy", which (a) drained the async pipeline on every
+// transfer -- pure wall-clock overhead, invisible to rocprof -- and (b) mixed the legacy default stream with the
+// NON-BLOCKING dispatch stream, an ordering hazard. Now everything in HIP-buffer mode lives on one stream.
 static bool ggml_backend_hrx_hip_copy(void * dst, const void * src, size_t size, hipMemcpyKind kind) {
-    if (g_hrx_hip_inited && g_hrx_hip_stream) { GGML_HRX_HIP_CHECK(hipStreamSynchronize(g_hrx_hip_stream)); }
-    GGML_HRX_HIP_CHECK(hipMemcpy(dst, src, size, kind));
+    if (!ggml_backend_hrx_hip_ensure_init()) { return false; }
+    GGML_HRX_HIP_CHECK(hipMemcpyAsync(dst, src, size, kind, g_hrx_hip_stream));
+    if (kind == hipMemcpyDeviceToHost) { GGML_HRX_HIP_CHECK(hipStreamSynchronize(g_hrx_hip_stream)); }
     return true;
 }
 static bool ggml_backend_hrx_hip_memset(void * dst, int value, size_t size) {
-    if (g_hrx_hip_inited && g_hrx_hip_stream) { GGML_HRX_HIP_CHECK(hipStreamSynchronize(g_hrx_hip_stream)); }
-    GGML_HRX_HIP_CHECK(hipMemset(dst, value, size));
+    if (!ggml_backend_hrx_hip_ensure_init()) { return false; }
+    GGML_HRX_HIP_CHECK(hipMemsetAsync(dst, value, size, g_hrx_hip_stream));
     return true;
 }
 
@@ -1894,6 +1902,26 @@ static void ggml_backend_hrx_device_buffer_free(hrx_buffer_t buffer) {
     }
 #endif
     hrx_buffer_release(buffer);
+}
+
+// P058: buffer-to-buffer copy for DEVICE-resident buffers (CPY/CONT/DUP, SSM state tail). In pure-HIP buffer
+// mode both buffers are hipMalloc'd and have NO IREE hal_buffer, so route the copy through hipMemcpy
+// device-to-device on the device VAs (the buffer handle reinterpreted as a VA, + offset -- the same VA the HIP
+// dispatch consumes). Otherwise use the IREE stream copy. Without this, CPY/CONT crash in HIP-buffer mode
+// (hrx_stream_copy_buffer derefs the absent hal_buffer). NOT for staging-arena host transfers -- those use a
+// host-visible IREE buffer and are bypassed in HIP-buffer mode (set_tensor/get_tensor branch to hip_copy).
+static bool ggml_backend_hrx_device_copy_buffer(hrx_stream_t stream,
+                                                 hrx_buffer_t src_buffer, size_t src_offset,
+                                                 hrx_buffer_t dst_buffer, size_t dst_offset,
+                                                 size_t size) {
+#ifdef GGML_HRX_HAVE_HIP
+    if (ggml_backend_hrx_hip_buffers_enabled()) {
+        void *       dst = reinterpret_cast<void *>(reinterpret_cast<uint64_t>(dst_buffer) + dst_offset);
+        const void * src = reinterpret_cast<const void *>(reinterpret_cast<uint64_t>(src_buffer) + src_offset);
+        return ggml_backend_hrx_hip_copy(dst, src, size, hipMemcpyDeviceToDevice);
+    }
+#endif
+    return GGML_HRX_CHECK(hrx_stream_copy_buffer(stream, src_buffer, src_offset, dst_buffer, dst_offset, size));
 }
 
 static hrx_status_t ggml_backend_hrx_stream_dispatch(
@@ -8620,13 +8648,13 @@ static ggml_status ggml_backend_hrx_dispatch_cpy(ggml_backend_hrx_context * cont
         }
     } else if (ggml_is_contiguous(src0)) {
         if (src_ref.buffer != dst_ref.buffer || src_ref.offset != dst_ref.offset) {
-            if (!GGML_HRX_CHECK(hrx_stream_copy_buffer(
+            if (!ggml_backend_hrx_device_copy_buffer(
                     context->stream,
                     src_ref.buffer,
                     src_ref.offset,
                     dst_ref.buffer,
                     dst_ref.offset,
-                    size))) {
+                    size)) {
                 return GGML_STATUS_FAILED;
             }
         }
@@ -8675,13 +8703,13 @@ static ggml_status ggml_backend_hrx_dispatch_cpy(ggml_backend_hrx_context * cont
                         static_cast<size_t>(i1) * src0->nb[1] +
                         static_cast<size_t>(i2) * src0->nb[2] +
                         static_cast<size_t>(i3) * src0->nb[3];
-                    if (!GGML_HRX_CHECK(hrx_stream_copy_buffer(
+                    if (!ggml_backend_hrx_device_copy_buffer(
                             context->stream,
                             src_ref.buffer,
                             src_offset,
                             dst_ref.buffer,
                             dst_offset,
-                            row_size))) {
+                            row_size)) {
                         return GGML_STATUS_FAILED;
                     }
                     dst_offset += row_size;
@@ -11413,13 +11441,13 @@ static ggml_status ggml_backend_hrx_dispatch_gated_delta_net(
     }
     if (state_dst && preserve_state_tail) {
         const size_t attn_nbytes = static_cast<size_t>(attn_score_elems) * sizeof(float);
-        if (!GGML_HRX_CHECK(hrx_stream_copy_buffer(
+        if (!ggml_backend_hrx_device_copy_buffer(
                 context->stream,
                 bindings[state_dst_binding_index].buffer,
                 bindings[state_dst_binding_index].offset,
                 bindings[dst_binding_index].buffer,
                 bindings[dst_binding_index].offset + attn_nbytes,
-                ggml_nbytes(state_dst)))) {
+                ggml_nbytes(state_dst))) {
             return GGML_STATUS_FAILED;
         }
     }
