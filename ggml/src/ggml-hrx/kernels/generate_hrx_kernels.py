@@ -1647,6 +1647,18 @@ KERNELS = [
         "workgroup_size": (128, 1, 1),
     },
     {
+        # P058 fa_dense_01 (lever B2; default-on, opt out GGML_HRX_DISABLE_FA_DECODE_SMEM):
+        # LDS-shared-K/V variant of the float4 split kernel — the 4 GQA row_groups of one
+        # workgroup stage each BC=32 K/V tile into __shared__ ONCE instead of 4 redundant
+        # global f16 loads (~-29% on the split kernel at long KV). Identical ABI/scratch/_combine.
+        "name": "hrx_flash_attn_ext_f32_f16_decode_split_smem",
+        "source": "flash_attn_ext_f32_f16_decode_split_smem.hip.cpp",
+        "format": None,
+        "binding_count": 7,
+        "constants_size": 200,
+        "workgroup_size": (128, 1, 1),
+    },
+    {
         "name": "hrx_flash_attn_ext_f32_f16_decode_combine",
         "source": "flash_attn_ext_f32_f16_decode_combine.hip.cpp",
         "format": None,

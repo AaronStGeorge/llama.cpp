@@ -8802,6 +8802,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         { 128, 128, 8,  {4, 1},  256, 1,  true,  false, 0.0f,  0.0f, GGML_PREC_F32,     GGML_TYPE_F16,  {0, 1, 2, 3} },
         { 128, 128, 8,  {4, 1},   96, 1,  false, false, 0.0f,  0.0f, GGML_PREC_F32,     GGML_TYPE_F16,  {0, 1, 2, 3} },
         { 128, 128, 8,  {4, 1},   96, 1,  true,  true,  0.0f,  0.0f, GGML_PREC_F32,     GGML_TYPE_F16,  {0, 1, 2, 3} },
+        // LONG KV (D=128, GQA-4): the decode geometry the -n 256 benchmark scales into. Stresses the
+        // split-K compute (and any half2 packed-math variant) where the FA gap grows with KV.
+        { 128, 128, 8,  {4, 1},  384, 1,  true,  false, 0.0f,  0.0f, GGML_PREC_F32,     GGML_TYPE_F16,  {0, 1, 2, 3} },
+        { 128, 128, 8,  {4, 1},  512, 1,  true,  false, 0.0f,  0.0f, GGML_PREC_F32,     GGML_TYPE_F16,  {0, 1, 2, 3} },
+        { 128, 128, 8,  {4, 1},  512, 1,  false, false, 0.0f,  0.0f, GGML_PREC_F32,     GGML_TYPE_F16,  {0, 1, 2, 3} },
+        { 128, 128, 8,  {4, 1},  512, 1,  true,  true,  0.0f,  0.0f, GGML_PREC_F32,     GGML_TYPE_F16,  {0, 1, 2, 3} },
     };
 
     for (const auto & c : flash_attn_ext_cases) {

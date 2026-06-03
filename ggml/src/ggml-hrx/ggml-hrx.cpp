@@ -1209,6 +1209,9 @@ struct ggml_backend_hrx_device_context {
     ggml_backend_hrx_op_provider flash_attn_ext_f16_decode_gqa8_split_provider;
     ggml_backend_hrx_op_provider flash_attn_ext_f16_decode_gqa8_reduce_provider;
     ggml_backend_hrx_op_provider flash_attn_ext_f16_decode_split_provider;
+    // P058 fa_dense_01 (lever B2): LDS-shared-K/V variant of the split kernel, swapped
+    // in for the split provider by default (opt out via GGML_HRX_DISABLE_FA_DECODE_SMEM).
+    ggml_backend_hrx_op_provider flash_attn_ext_f16_decode_split_smem_provider;
     ggml_backend_hrx_op_provider flash_attn_ext_f16_decode_combine_provider;
     ggml_backend_hrx_op_provider flash_attn_ext_f16_prefill_tile_provider;
     ggml_backend_hrx_op_provider flash_attn_ext_f16_prefill_wmma_provider;
@@ -1427,6 +1430,7 @@ static void ggml_backend_hrx_reset_providers(ggml_backend_hrx_device_context * d
     device_context->flash_attn_ext_f16_decode_gqa8_split_provider.reset();
     device_context->flash_attn_ext_f16_decode_gqa8_reduce_provider.reset();
     device_context->flash_attn_ext_f16_decode_split_provider.reset();
+    device_context->flash_attn_ext_f16_decode_split_smem_provider.reset();
     device_context->flash_attn_ext_f16_decode_combine_provider.reset();
     device_context->flash_attn_ext_f16_prefill_tile_provider.reset();
     device_context->flash_attn_ext_f16_prefill_wmma_provider.reset();
@@ -3373,6 +3377,9 @@ static bool ggml_backend_hrx_load_flash_attn_ext_providers(ggml_backend_hrx_devi
     ok = ggml_backend_hrx_load_catalog_provider(
         device_context, "hrx_flash_attn_ext_f32_f16_decode_split",
         &device_context->flash_attn_ext_f16_decode_split_provider) || ok;
+    ok = ggml_backend_hrx_load_catalog_provider(
+        device_context, "hrx_flash_attn_ext_f32_f16_decode_split_smem",
+        &device_context->flash_attn_ext_f16_decode_split_smem_provider) || ok;
     ok = ggml_backend_hrx_load_catalog_provider(
         device_context, "hrx_flash_attn_ext_f32_f16_decode_combine",
         &device_context->flash_attn_ext_f16_decode_combine_provider) || ok;
@@ -6462,6 +6469,20 @@ static bool ggml_backend_hrx_supports_flash_attn_ext_f32_f16_decode_split(
            (!mask || mask->nb[0] == ggml_type_size(mask->type)) &&
            op->nb[0] == sizeof(float) &&
            ggml_is_contiguous(op);
+}
+
+// P058 fa_dense_01 (lever B2; default-on, opt out via GGML_HRX_DISABLE_FA_DECODE_SMEM): when the
+// LDS-shared-K/V split kernel is in the catalog, dispatch it in place of the float4 split kernel — its
+// 4 GQA row_groups stage each BC=32 K/V tile into __shared__ ONCE instead of 4 redundant global f16
+// loads (~-29% on the split kernel at long KV). Same shape envelope, scratch layout, grid and _combine
+// as the split path — only the split provider (kernel body) differs.
+static bool ggml_backend_hrx_supports_flash_attn_ext_f32_f16_decode_split_smem(
+        const ggml_backend_hrx_device_context * device_context,
+        const ggml_tensor * op) {
+    return !ggml_backend_hrx_env_enabled("GGML_HRX_DISABLE_FA_DECODE_SMEM") &&
+        device_context->flash_attn_ext_f16_decode_split_smem_provider.kind ==
+            ggml_backend_hrx_provider_kind::hsaco &&
+        ggml_backend_hrx_supports_flash_attn_ext_f32_f16_decode_split(device_context, op);
 }
 
 static bool ggml_backend_hrx_supports_flash_attn_ext_f32_decode(
@@ -10354,7 +10375,14 @@ static ggml_status ggml_backend_hrx_dispatch_flash_attn_ext_f32_decode(
             return GGML_STATUS_FAILED;
         }
 
-        const auto & split_provider = context->device_context->flash_attn_ext_f16_decode_split_provider;
+        // P058 fa_dense_01 (lever B2): swap in the LDS-shared-K/V split kernel (default-on; opt out via
+        // GGML_HRX_DISABLE_FA_DECODE_SMEM). Identical 7-binding ABI / constants / scratch / grid; only the
+        // kernel body (LDS staging instead of redundant global K/V loads) differs.
+        const bool use_decode_split_smem =
+            ggml_backend_hrx_supports_flash_attn_ext_f32_f16_decode_split_smem(context->device_context, op);
+        const auto & split_provider = use_decode_split_smem ?
+            context->device_context->flash_attn_ext_f16_decode_split_smem_provider :
+            context->device_context->flash_attn_ext_f16_decode_split_provider;
         const uint32_t split_workgroup_size = split_provider.export_info.workgroup_size[0] ?
             split_provider.export_info.workgroup_size[0] : 128;
         // Vectorized split kernel: one workgroup per (kv_head, split); its 4 wavefronts process the GQA query
