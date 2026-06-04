@@ -3,7 +3,7 @@
 #include <math.h>
 #include <stdint.h>
 
-struct hrx_flash_attn_ext_f32_f16_decode_gqa8_reduce_constants {
+struct hrx_flash_attn_ext_f32_f16_decode_reduce_constants {
     long long D;
     long long KV;
     long long N;
@@ -35,19 +35,23 @@ struct hrx_flash_attn_ext_f32_f16_decode_gqa8_reduce_constants {
     int has_sinks;
 };
 
-extern "C" __global__ __launch_bounds__(256) void hrx_flash_attn_ext_f32_f16_decode_gqa8_reduce(
+extern "C" __global__ __launch_bounds__(256) void hrx_flash_attn_ext_f32_f16_decode_reduce(
         const float * scratch,
         const float * sinks,
         float * dst,
-        hrx_flash_attn_ext_f32_f16_decode_gqa8_reduce_constants c) {
+        hrx_flash_attn_ext_f32_f16_decode_reduce_constants c) {
     constexpr int SPLITS = 8;
-    constexpr int D = 256;
+    // P059: D taken at runtime (was constexpr 256) so this reduce serves BOTH decode split paths --
+    // decode_gqa8_split (head-dim 256 / GQA-8) and decode_split (head-dim 128 / GQA-4). The reduce math is
+    // head-dim agnostic; only SPLITS (8, shared) must match the split kernels, and the #pragma unroll below
+    // stays effective since SPLITS is still constexpr.
+    const long long D = c.D;
 
     const long long head = __builtin_amdgcn_workgroup_id_x();
     const long long token = __builtin_amdgcn_workgroup_id_y();
     const long long seq = __builtin_amdgcn_workgroup_id_z();
     const unsigned int tid = __builtin_amdgcn_workitem_id_x();
-    if (head >= c.H || token >= c.N || seq >= c.S || c.D != D) {
+    if (head >= c.H || token >= c.N || seq >= c.S) {
         return;
     }
 

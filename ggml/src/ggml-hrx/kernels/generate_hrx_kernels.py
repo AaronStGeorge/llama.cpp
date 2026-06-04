@@ -1567,16 +1567,27 @@ KERNELS = [
         "workgroup_size": (256, 1, 1),
     },
     {
+        # D=256/GQA-8 instantiation; body lives in flash_attn_ext_f32_f16_decode_split.hip.cpp (templated).
         "name": "hrx_flash_attn_ext_f32_f16_decode_gqa8_split",
-        "source": "flash_attn_ext_f32_f16_decode_gqa8_split.hip.cpp",
+        "source": "flash_attn_ext_f32_f16_decode_split.hip.cpp",
         "format": None,
         "binding_count": 7,
         "constants_size": 200,
         "workgroup_size": (128, 1, 1),
     },
     {
-        "name": "hrx_flash_attn_ext_f32_f16_decode_gqa8_reduce",
-        "source": "flash_attn_ext_f32_f16_decode_gqa8_reduce.hip.cpp",
+        # P058: split-K decode FA for head-dim 128 (Llama-3.x), GQA-agnostic. Routes the D=128
+        # decode (which the head-dim-256 gqa8 path excludes) to a split-over-KV + combine pair.
+        "name": "hrx_flash_attn_ext_f32_f16_decode_split",
+        "source": "flash_attn_ext_f32_f16_decode_split.hip.cpp",
+        "format": None,
+        "binding_count": 7,
+        "constants_size": 200,
+        "workgroup_size": (128, 1, 1),
+    },
+    {
+        "name": "hrx_flash_attn_ext_f32_f16_decode_reduce",
+        "source": "flash_attn_ext_f32_f16_decode_reduce.hip.cpp",
         "format": None,
         "binding_count": 3,
         "constants_size": 200,
