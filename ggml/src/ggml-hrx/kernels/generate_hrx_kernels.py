@@ -1586,6 +1586,15 @@ KERNELS = [
         "workgroup_size": (128, 1, 1),
     },
     {
+        # LDS-shared-K/V variant; body lives in flash_attn_ext_f32_f16_decode_split.hip.cpp.
+        "name": "hrx_flash_attn_ext_f32_f16_decode_split_smem",
+        "source": "flash_attn_ext_f32_f16_decode_split.hip.cpp",
+        "format": None,
+        "binding_count": 7,
+        "constants_size": 200,
+        "workgroup_size": (128, 1, 1),
+    },
+    {
         "name": "hrx_flash_attn_ext_f32_f16_decode_reduce",
         "source": "flash_attn_ext_f32_f16_decode_reduce.hip.cpp",
         "format": None,

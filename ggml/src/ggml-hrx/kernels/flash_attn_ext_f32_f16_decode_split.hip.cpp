@@ -10,9 +10,11 @@
 // register-resident online softmax for every instantiation; the compile-time D/GQA keep VEC_PER_THREAD and the
 // per-head register arrays static (no spills). Writes un-normalized (O, m, l) partials to scratch;
 // hrx_flash_attn_ext_f32_f16_decode_reduce (the shared runtime-D reduce) combines across SPLITS.
-// Grid {H_KV*SPLITS, N, S}, 128 threads. Two instantiations are exported at the bottom:
-//   hrx_..._decode_gqa8_split  -> <D=256, GQA=8>  (2 heads/row_group)  [Llama-3.x-style 256-dim]
-//   hrx_..._decode_split       -> <D=128, GQA=4>  (1 head/row_group)   [Llama-3.x 128-dim]
+// Grid {H_KV*SPLITS, N, S}, 128 threads. Three kernels are exported at the bottom:
+//   hrx_..._decode_gqa8_split  -> template <D=256, GQA=8>  (2 heads/row_group)  [256-dim]
+//   hrx_..._decode_split       -> template <D=128, GQA=4>  (1 head/row_group)   [Llama-3.x 128-dim]
+//   hrx_..._decode_split_smem  -> D=128/GQA-4 LDS-shared-K/V variant of decode_split (runtime default;
+//                                 opt out via GGML_HRX_DISABLE_FA_DECODE_SMEM). Same partials/scratch/reduce.
 struct hrx_flash_attn_ext_f32_f16_decode_constants {
     long long D;
     long long KV;
@@ -51,6 +53,11 @@ static __device__ __forceinline__ float hrx_fa_split_load_f16(const __half * bas
 
 static __device__ __forceinline__ float4 hrx_fa_split_load_f16x4(const char * ptr) {
     const __half * h = reinterpret_cast<const __half *>(ptr);
+    return make_float4(__half2float(h[0]), __half2float(h[1]), __half2float(h[2]), __half2float(h[3]));
+}
+
+// Overload for K/V already resident in LDS as __half[] (used by the split_smem variant below).
+static __device__ __forceinline__ float4 hrx_fa_split_load_f16x4(const __half * h) {
     return make_float4(__half2float(h[0]), __half2float(h[1]), __half2float(h[2]), __half2float(h[3]));
 }
 
@@ -358,4 +365,203 @@ extern "C" __global__ __launch_bounds__(128) void hrx_flash_attn_ext_f32_f16_dec
         float * scratch,
         hrx_flash_attn_ext_f32_f16_decode_constants c) {
     hrx_flash_attn_ext_f32_f16_decode_split_impl<128, 4>(q, k, v, mask, sinks, dst, scratch, c);
+}
+
+// D=128 / GQA-4 LDS-shared-K/V variant of decode_split (runtime default; opt out via
+// GGML_HRX_DISABLE_FA_DECODE_SMEM). Stages each BC=32 x D=128 K/V tile into __shared__ ONCE for the 4
+// row_groups instead of re-loading from global per head (~-29% on the split kernel at long KV). Same shape
+// envelope / scratch layout / grid / decode_reduce as decode_split -- only the K/V staging differs, so it
+// reuses this file's helpers + constants. Single-head (no head-dim-256 smem consumer); the plain
+// decode_split<128,4> above is the opt-out fallback.
+extern "C" __global__ __launch_bounds__(128) void hrx_flash_attn_ext_f32_f16_decode_split_smem(
+        const float * q,
+        const __half * k,
+        const __half * v,
+        const __half * mask,
+        const float * sinks,
+        float * dst,
+        float * scratch,
+        hrx_flash_attn_ext_f32_f16_decode_constants c) {
+    (void) sinks;   // sinks + normalization are the reduce kernel's job
+    (void) dst;     // present only to keep the binding order identical to the single-kernel ABI
+    constexpr int GQA = 4;
+    constexpr int SPLITS = 8;
+    constexpr int D = 128;
+    constexpr int D_SPLIT = 8;
+    constexpr int BC = 32;
+    constexpr int COLS_PER_THREAD = 8;
+    constexpr int VEC_PER_THREAD = D / (4 * D_SPLIT);   // 128 / 32 = 4
+
+    // One BC=32 x D=128 f16 tile each for K and V, staged ONCE per tile and shared by the 4 row_groups.
+    // 32*128 = 4096 halves = 8 KiB each, 16 KiB total (gfx1100 has 64 KiB LDS/wg -> >= 4 wg/CU by LDS).
+    __shared__ __half smem_k[BC * D];
+    __shared__ __half smem_v[BC * D];
+
+    const long long x = __builtin_amdgcn_workgroup_id_x();
+    const long long split = x % SPLITS;
+    const long long kv_head = x / SPLITS;
+    const long long token = __builtin_amdgcn_workgroup_id_y();
+    const long long seq = __builtin_amdgcn_workgroup_id_z();
+    const unsigned int tid = __builtin_amdgcn_workitem_id_x();
+    const unsigned int lane = tid & 31;
+    const unsigned int row_group = tid >> 5;                 // one query head per row_group (GQA-4 -> 4 heads)
+    const unsigned int d_tid = lane & (D_SPLIT - 1);
+    const unsigned int col_tid = lane >> 3;
+
+    if (kv_head >= c.H_KV || token >= c.N || seq >= c.S || c.D != D || c.H != c.H_KV * GQA) {
+        return;
+    }
+
+    const long long split_chunk = (((c.KV + SPLITS - 1) / SPLITS) + (BC - 1)) & ~(static_cast<long long>(BC) - 1);
+    const long long split_begin = split * split_chunk;
+    const long long split_end = split_begin + split_chunk < c.KV ? split_begin + split_chunk : c.KV;
+
+    const long long head = kv_head * GQA + row_group;
+    const bool valid = row_group < GQA && head < c.H;
+
+    const char * k_head = reinterpret_cast<const char *>(k) + kv_head * c.k_nb2 + seq * c.k_nb3;
+    const char * v_head = reinterpret_cast<const char *>(v) + kv_head * c.v_nb2 + seq * c.v_nb3;
+    const char * q_head = reinterpret_cast<const char *>(q) + token * c.q_nb1 + head * c.q_nb2 + seq * c.q_nb3;
+    const char * mask_row = reinterpret_cast<const char *>(mask) + token * c.mask_nb1 + seq * c.mask_nb3;
+    const float slope = valid ? hrx_fa_split_alibi_slope(c, head) : 1.0f;
+
+    float l = 0.0f;
+    float m = -FLT_MAX * 0.5f;
+    float4 out[VEC_PER_THREAD];
+#pragma unroll
+    for (int d = 0; d < VEC_PER_THREAD; ++d) {
+        out[d] = hrx_fa_split_f4_zero();
+    }
+
+    // Cooperative-staging geometry: the 32x128 f16 K (and V) tile is 8 KiB = 512 x 16-byte chunks. 128
+    // threads each copy 4 chunks. chunk g -> column (g >> 4) in [0,32), within-column float4 (g & 15) in
+    // [0,16) (16 float4 = 128 halves per column). Address from k_head + col*k_nb1 honours padded row
+    // strides (k_nb1 may exceed 256). The f16 bits are copied verbatim (no convert) via a 16-byte load.
+    constexpr int CHUNKS = (BC * D * (int) sizeof(__half)) / 16;   // 8192 / 16 = 512
+    constexpr int CHUNKS_PER_THREAD = CHUNKS / 128;                // 512 / 128 = 4
+
+    for (long long jb = split_begin; jb < split_end; jb += BC) {
+        // Stage this tile's K and V into LDS, cooperatively, once for all 4 row_groups.
+#pragma unroll
+        for (int t = 0; t < CHUNKS_PER_THREAD; ++t) {
+            const int g = static_cast<int>(tid) + t * 128;
+            const int col = g >> 4;                     // 0..31
+            const int f4  = g & 15;                     // 0..15 (float4 within the 128-half column)
+            const long long kv_col = jb + col;
+            const int half_off = f4 * 8;                // 0..127, first of 8 halves this chunk copies
+            float4 * dst_k = reinterpret_cast<float4 *>(smem_k + col * D + half_off);
+            float4 * dst_v = reinterpret_cast<float4 *>(smem_v + col * D + half_off);
+            if (kv_col < c.KV) {
+                const char * k_src = k_head + kv_col * c.k_nb1 + half_off * static_cast<int>(sizeof(__half));
+                const char * v_src = v_head + kv_col * c.v_nb1 + half_off * static_cast<int>(sizeof(__half));
+                *dst_k = *reinterpret_cast<const float4 *>(k_src);
+                *dst_v = *reinterpret_cast<const float4 *>(v_src);
+            } else {
+                *dst_k = hrx_fa_split_f4_zero();
+                *dst_v = hrx_fa_split_f4_zero();
+            }
+        }
+        __builtin_amdgcn_s_barrier();
+
+        float scores[COLS_PER_THREAD];
+#pragma unroll
+        for (int ci = 0; ci < COLS_PER_THREAD; ++ci) {
+            const int tile_col = ci * 4 + static_cast<int>(col_tid);
+            const long long kv_col = jb + tile_col;
+            const bool valid_col = kv_col < split_end;
+            float mask_value = 0.0f;
+            if (c.has_mask && valid_col) {
+                mask_value = hrx_fa_split_load_f16(reinterpret_cast<const __half *>(mask_row), kv_col * c.mask_nb0);
+            }
+
+            float s = 0.0f;
+            if (valid_col && (!c.has_mask || mask_value > -60000.0f)) {
+                const __half * k_row = smem_k + tile_col * D;
+#pragma unroll
+                for (int d = 0; d < VEC_PER_THREAD; ++d) {
+                    const int vec_index = d * D_SPLIT + static_cast<int>(d_tid);
+                    const float4 kv = hrx_fa_split_load_f16x4(k_row + vec_index * 4);
+                    if (valid) {
+                        const int byte_offset_f32 = vec_index * 4 * static_cast<int>(sizeof(float));
+                        const float4 qv = hrx_fa_split_scale4(
+                            hrx_fa_split_load_f32x4(q_head + byte_offset_f32), c.scale);
+                        s += hrx_fa_split_dot4(qv, kv);
+                    }
+                }
+                s = hrx_fa_split_sum_dsplit(s);
+                if (c.logit_softcap != 0.0f) {
+                    s = c.logit_softcap * tanhf(s);
+                }
+                if (c.has_mask) {
+                    s += slope * mask_value;
+                }
+            } else {
+                s = -FLT_MAX * 0.5f;
+            }
+            scores[ci] = valid ? s : -FLT_MAX * 0.5f;
+        }
+
+        float row_max = -FLT_MAX * 0.5f;
+#pragma unroll
+        for (int ci = 0; ci < COLS_PER_THREAD; ++ci) {
+            row_max = fmaxf(row_max, scores[ci]);
+        }
+        row_max = hrx_fa_split_max_cols(row_max);
+
+        const float old_m = m;
+        m = fmaxf(m, row_max);
+        const float old_scale = expf(old_m - m);
+        l *= old_scale;
+#pragma unroll
+        for (int d = 0; d < VEC_PER_THREAD; ++d) {
+            out[d] = hrx_fa_split_scale4(out[d], old_scale);
+        }
+
+#pragma unroll
+        for (int ci = 0; ci < COLS_PER_THREAD; ++ci) {
+            const int tile_col = ci * 4 + static_cast<int>(col_tid);
+            const long long kv_col = jb + tile_col;
+            if (kv_col >= split_end) {
+                continue;
+            }
+            const float p = expf(scores[ci] - m);
+            l += p;
+            const __half * v_row = smem_v + tile_col * D;
+#pragma unroll
+            for (int d = 0; d < VEC_PER_THREAD; ++d) {
+                const int vec_index = d * D_SPLIT + static_cast<int>(d_tid);
+                const float4 vv = hrx_fa_split_load_f16x4(v_row + vec_index * 4);
+                out[d] = hrx_fa_split_f4_madd(out[d], p, vv);
+            }
+        }
+        // WAR guard: the next tile's staging must not overwrite LDS that lagging lanes still read here.
+        __builtin_amdgcn_s_barrier();
+    }
+
+    l = hrx_fa_split_sum_cols(l);
+#pragma unroll
+    for (int d = 0; d < VEC_PER_THREAD; ++d) {
+        out[d] = hrx_fa_split_sum_cols4(out[d]);
+    }
+
+    if (col_tid == 0) {
+        const size_t partial_count = static_cast<size_t>(c.S) * static_cast<size_t>(c.N) *
+            static_cast<size_t>(c.H) * SPLITS;
+        float * scratch_o = scratch;
+        float * scratch_l = scratch_o + partial_count * D;
+        float * scratch_m = scratch_l + partial_count;
+        const size_t base = (((static_cast<size_t>(seq) * c.N + static_cast<size_t>(token)) *
+            c.H + static_cast<size_t>(head)) * SPLITS + static_cast<size_t>(split));
+        if (d_tid == 0 && valid) {
+            scratch_l[base] = l;
+            scratch_m[base] = m;
+        }
+#pragma unroll
+        for (int d = 0; d < VEC_PER_THREAD; ++d) {
+            const int vec_index = d * D_SPLIT + static_cast<int>(d_tid);
+            if (valid) {
+                *reinterpret_cast<float4 *>(scratch_o + base * D + vec_index * 4) = out[d];
+            }
+        }
+    }
 }
