@@ -1,0 +1,129 @@
+name: HRX build
+
+on:
+  workflow_dispatch:
+    inputs:
+      bench_ref:
+        description: llamacpp-hrx-bench ref to check out (tooling source)
+        required: false
+        default: refs/pull/3/head
+        type: string
+      hrx_artifact_set:
+        description: TheRock ROCm artifact set
+        required: false
+        default: core-with-upstream-hip
+        type: string
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - hrx-integration
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  hrx-build:
+    name: ubuntu-latest
+    runs-on: ubuntu-latest
+    env:
+      HRX_WORK_DIR: ${{ github.workspace }}
+      BENCH_REPOSITORY: ROCm/llamacpp-hrx-bench
+      BENCH_REF: ${{ github.event.inputs.bench_ref || 'refs/pull/3/head' }}
+      BENCH_DIR: ${{ github.workspace }}/bench
+      LLAMA_SRC_DIR: ${{ github.workspace }}/llama-src
+      HRX_ARTIFACT_SET: ${{ github.event.inputs.hrx_artifact_set || 'core-with-upstream-hip' }}
+      CCACHE_COMPILERCHECK: content
+
+    steps:
+      - name: Checkout llama.cpp (under test)
+        uses: actions/checkout@v6
+        with:
+          path: llama-src
+          # fetch-depth 2 so download-parent-artifact can resolve HEAD^ (the
+          # baseline llama.cpp commit) on workflow_dispatch runs.
+          fetch-depth: 2
+
+      - name: Checkout bench tooling
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.BENCH_REPOSITORY }}
+          ref: ${{ env.BENCH_REF }}
+          path: bench
+
+      - name: Install ROCm build dependencies
+        run: "${BENCH_DIR}/scripts/hrx/install-rocm-deps.sh"
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: ubuntu-latest-${{ env.HRX_ARTIFACT_SET }}
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'pull_request' }}
+
+      - name: Checkout HRX
+        run: "${BENCH_DIR}/scripts/hrx/checkout-hrx.sh"
+
+      - name: Fetch ROCm assets
+        run: "${BENCH_DIR}/scripts/hrx/fetch-rocm-assets.sh"
+
+      - name: Build HRX
+        run: "${BENCH_DIR}/scripts/hrx/build-hrx.sh"
+
+      - name: Validate HRX
+        run: "${BENCH_DIR}/scripts/hrx/validate-hrx.sh"
+
+      - name: Build llama.cpp with HRX
+        run: "${BENCH_DIR}/scripts/hrx/build-llama-hrx.sh"
+
+      - name: Run sample MUL_MAT correctness config on CPU
+        run: |
+          . "${BENCH_DIR}/scripts/hrx/env.sh"
+          "${BENCH_DIR}/tools/run-op-test.py" \
+            --test-backend-ops "${LLAMA_BUILD_DIR}/bin/test-backend-ops" \
+            --test-file "${BENCH_DIR}/benchmark-configs/test/mul_mat_f16.txt" \
+            --op MUL_MAT \
+            --backend CPU \
+            --output benchmark-results/sample-mul-mat-f16-cpu-test.jsonl
+
+      - name: Run sample MUL_MAT benchmark config on CPU
+        run: |
+          . "${BENCH_DIR}/scripts/hrx/env.sh"
+          "${BENCH_DIR}/tools/run-op-perf.py" \
+            --test-backend-ops "${LLAMA_BUILD_DIR}/bin/test-backend-ops" \
+            --test-file "${BENCH_DIR}/benchmark-configs/test/mul_mat_f16.txt" \
+            --op MUL_MAT \
+            --backend CPU \
+            --output benchmark-results/sample-mul-mat-f16-cpu-perf.jsonl
+
+      - name: Upload CPU benchmark results
+        uses: actions/upload-artifact@v5
+        with:
+          name: cpu-benchmark-results
+          path: benchmark-results/
+
+      - name: Download previous CPU benchmark results
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PARENT_SHA: ${{ github.event.before || github.event.pull_request.base.sha || '' }}
+        # Run inside the llama-src checkout so the script's `git rev-parse HEAD^`
+        # fallback resolves the baseline llama.cpp commit; write into the
+        # workspace-root benchmark-results dir the compare step reads from.
+        working-directory: llama-src
+        run: "${BENCH_DIR}/tools/download-parent-artifact.sh cpu-benchmark-results ${{ github.workspace }}/benchmark-results/previous"
+
+      - name: Compare CPU benchmark results
+        run: |
+          set -euo pipefail
+          previous="benchmark-results/previous/sample-mul-mat-f16-cpu-perf.jsonl"
+          current="benchmark-results/sample-mul-mat-f16-cpu-perf.jsonl"
+          if [[ ! -f "${previous}" ]]; then
+            echo "No previous CPU benchmark JSONL found; skipping comparison."
+            exit 0
+          fi
+          . "${BENCH_DIR}/scripts/hrx/env.sh"
+          "${BENCH_DIR}/tools/compare-op-perf.py" "${previous}" "${current}" --max-regression-pct 5 --require-all-cases
