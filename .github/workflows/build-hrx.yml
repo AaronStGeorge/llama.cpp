@@ -54,6 +54,9 @@ jobs:
           repository: ${{ env.BENCH_REPOSITORY }}
           ref: ${{ env.BENCH_REF }}
           path: bench
+          # The bench repo is private; the default GITHUB_TOKEN is scoped to
+          # this repo only. Supply a PAT with read access to BENCH_REPOSITORY.
+          token: ${{ secrets.BENCH_PAT }}
 
       - name: Install ROCm build dependencies
         run: "${BENCH_DIR}/scripts/hrx/install-rocm-deps.sh"
