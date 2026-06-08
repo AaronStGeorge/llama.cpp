@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       bench_ref:
-        description: llamacpp-hrx-bench ref to check out (tooling source)
+        description: bench tooling ref to check out (rsuderman/llamacpp_ci)
         required: false
-        default: refs/pull/3/head
+        default: main
         type: string
       hrx_artifact_set:
         description: TheRock ROCm artifact set
@@ -32,8 +32,10 @@ jobs:
     runs-on: ubuntu-latest
     env:
       HRX_WORK_DIR: ${{ github.workspace }}
-      BENCH_REPOSITORY: ROCm/llamacpp-hrx-bench
-      BENCH_REF: ${{ github.event.inputs.bench_ref || 'refs/pull/3/head' }}
+      # Public mirror of the bench tooling (identical scripts/hrx + tools to
+      # ROCm/llamacpp-hrx-bench#3), so no PAT is needed to check it out.
+      BENCH_REPOSITORY: rsuderman/llamacpp_ci
+      BENCH_REF: ${{ github.event.inputs.bench_ref || 'main' }}
       BENCH_DIR: ${{ github.workspace }}/bench
       LLAMA_SRC_DIR: ${{ github.workspace }}/llama-src
       HRX_ARTIFACT_SET: ${{ github.event.inputs.hrx_artifact_set || 'core-with-upstream-hip' }}
@@ -54,9 +56,6 @@ jobs:
           repository: ${{ env.BENCH_REPOSITORY }}
           ref: ${{ env.BENCH_REF }}
           path: bench
-          # The bench repo is private; the default GITHUB_TOKEN is scoped to
-          # this repo only. Supply a PAT with read access to BENCH_REPOSITORY.
-          token: ${{ secrets.BENCH_PAT }}
 
       - name: Install ROCm build dependencies
         run: "${BENCH_DIR}/scripts/hrx/install-rocm-deps.sh"
