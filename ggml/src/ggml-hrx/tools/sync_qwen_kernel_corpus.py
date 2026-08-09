@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Mirrors the bounded Qwen MoE Loom corpus with reproducible provenance."""
+"""Mirrors the bounded Qwen MoE Loom corpus and its compilation recipes."""
 
 from __future__ import annotations
 
 import argparse
 import ast
-import hashlib
 import json
 import pathlib
 import re
@@ -209,10 +208,6 @@ def upstream_repository(repo: pathlib.Path) -> str:
     raise RuntimeError("HRX source tree has no repository remote for provenance")
 
 
-def sha256(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
-
-
 def parse_exports(text: str, source: str) -> list[dict[str, object]]:
     exports: list[dict[str, object]] = []
     for match in KERNEL_RE.finditer(text):
@@ -322,40 +317,27 @@ def construct(source_root: pathlib.Path, destination: pathlib.Path, expected_rev
             "primary_sources": list(module["srcs"]),
             "library_sources": [item for item in files if item not in module["srcs"]],
         }
-    file_rows: list[dict[str, object]] = []
     exports: list[dict[str, object]] = []
     target_selectors: dict[str, str] = {}
-    upstream_aggregate = hashlib.sha256()
     for relative_text in CORPUS_FILES:
         relative = pathlib.Path(relative_text)
         source = source_directory / relative
         if not source.is_file():
             raise RuntimeError(f"missing required corpus source: {source}")
         data = source.read_bytes()
-        digest = sha256(data)
-        upstream_aggregate.update(relative_text.encode())
-        upstream_aggregate.update(b"\0")
-        upstream_aggregate.update(bytes.fromhex(digest))
         target = destination / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
-        file_rows.append({"path": relative_text, "sha256": digest, "size": len(data)})
         source_text = data.decode("utf-8")
         exports.extend(parse_exports(source_text, relative_text))
         merge_amdgpu_targets(target_selectors, parse_amdgpu_targets(source_text))
 
-    owned_aggregate = hashlib.sha256()
     for filename in OWNED_FILES:
         source = OWNED_KERNEL_DIR / filename
         if not source.is_file():
             raise RuntimeError(f"missing required backend-owned kernel source: {source}")
         data = source.read_bytes()
-        digest = sha256(data)
         relative_text = f"../{filename}"
-        owned_aggregate.update(filename.encode())
-        owned_aggregate.update(b"\0")
-        owned_aggregate.update(bytes.fromhex(digest))
-        file_rows.append({"path": relative_text, "sha256": digest, "size": len(data), "owner": "ggml-hrx"})
         source_text = data.decode("utf-8")
         exports.extend(parse_exports(source_text, relative_text))
         merge_amdgpu_targets(target_selectors, parse_amdgpu_targets(source_text))
@@ -399,14 +381,9 @@ def construct(source_root: pathlib.Path, destination: pathlib.Path, expected_rev
         if not source.is_file():
             raise RuntimeError(f"missing required kernel dependency: {source}")
         data = source.read_bytes()
-        digest = sha256(data)
-        upstream_aggregate.update(relative_text.encode())
-        upstream_aggregate.update(b"\0")
-        upstream_aggregate.update(bytes.fromhex(digest))
         target = destination / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
-        file_rows.append({"path": relative_text, "sha256": digest, "size": len(data)})
 
     link_modules = [
         module for module in all_link_modules
@@ -476,22 +453,11 @@ def construct(source_root: pathlib.Path, destination: pathlib.Path, expected_rev
         },
     ])
 
-    upstream_digest = upstream_aggregate.hexdigest()
-    owned_digest = owned_aggregate.hexdigest()
-    combined_aggregate = hashlib.sha256()
-    combined_aggregate.update(bytes.fromhex(upstream_digest))
-    combined_aggregate.update(bytes.fromhex(owned_digest))
-
     manifest = {
         "schema": "ggml-hrx-qwen-kernel-corpus-v2",
         "upstream_repository": upstream_repository(source_root),
         "upstream_revision": revision,
         "source_subdirectory": SOURCE_SUBDIR.as_posix(),
-        "corpus_sha256": combined_aggregate.hexdigest(),
-        "upstream_corpus_sha256": upstream_digest,
-        "owned_corpus_sha256": owned_digest,
-        "build_bazel_sha256": sha256(build_data),
-        "files": file_rows,
         "exports": sorted(exports, key=lambda item: (str(item["symbol"]), str(item["source"]))),
         "link_modules": link_modules,
         "plan_cases": plan_cases,

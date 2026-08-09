@@ -22,7 +22,7 @@ struct KernelSpecialization {
     std::map<std::string, int64_t> integer_parameters;
     ExecutionKind execution_kind = ExecutionKind::Native;
     std::map<std::string, std::string> compile_parameters;
-    uint64_t kernel_id = kUncatalogedKernelId;
+    uint64_t kernel_id = GGML_HRX_KERNEL_ID_UNCATALOGED;
 };
 
 struct TensorBinding {

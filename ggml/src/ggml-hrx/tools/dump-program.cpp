@@ -21,24 +21,29 @@ int main(int argc, char ** argv) {
     }
 
     try {
-        const std::filesystem::path graph_path = argv[1];
-        const std::string target = argv[2];
+        const std::filesystem::path graph_path       = argv[1];
+        const std::string           target           = argv[2];
         const std::filesystem::path output_directory = argv[3];
 
         const std::string graph_text = ggml::hrx::tool::read_file(graph_path);
-        if (graph_text.empty()) throw std::runtime_error("cannot read " + graph_path.string());
+        if (graph_text.empty()) {
+            throw std::runtime_error("cannot read " + graph_path.string());
+        }
         const ggml::hrx::Graph graph = ggml::hrx::Graph::deserialize_json(graph_text);
-        if (!graph.valid()) throw std::runtime_error(
-            "invalid normalized graph: " + (graph.errors.empty() ? std::string("unknown error") : graph.errors.front()));
+        if (!graph.valid()) {
+            throw std::runtime_error("invalid normalized graph: " +
+                                     (graph.errors.empty() ? std::string("unknown error") : graph.errors.front()));
+        }
 
         const ggml::hrx::ProgramPlan plan = ggml::hrx::build_reactive_plan(graph, target);
-        if (!plan.valid()) throw std::runtime_error(
-            "cannot recover program: " + (plan.errors.empty() ? std::string("unknown error") : plan.errors.front()));
+        if (!plan.valid()) {
+            throw std::runtime_error("cannot recover program: " +
+                                     (plan.errors.empty() ? std::string("unknown error") : plan.errors.front()));
+        }
 
-        const ggml::hrx::KernelCorpus & corpus = ggml::hrx::get_qwen_kernel_corpus();
-        const ggml::hrx::CommandProgram commands = ggml::hrx::build_command_program(plan, corpus);
-        const ggml::hrx::VerificationResult verification =
-            ggml::hrx::verify_command_program(plan, corpus, commands);
+        const ggml::hrx::kernel_corpus &    corpus       = ggml::hrx::get_qwen_kernel_corpus();
+        const ggml::hrx::CommandProgram     commands     = ggml::hrx::build_command_program(plan, corpus);
+        const ggml::hrx::VerificationResult verification = ggml::hrx::verify_command_program(plan, corpus, commands);
 
         std::filesystem::create_directories(output_directory);
         const std::string & readable_program = plan.semantic_witness;
@@ -75,14 +80,16 @@ int main(int argc, char ** argv) {
                << "commands=" << commands.commands.size() << '\n'
                << "valid=" << (verification.valid() ? "true" : "false") << '\n'
                << ggml::hrx::format_verification_summary(verification.errors);
-        for (const std::string & warning : plan.warnings) status << "warning=" << warning << '\n';
+        for (const std::string & warning : plan.warnings) {
+            status << "warning=" << warning << '\n';
+        }
         write_file(output_directory / "status.txt", status.str());
-        write_file(output_directory / "verification-errors.txt", ggml::hrx::format_verification_errors(verification.errors));
+        write_file(output_directory / "verification-errors.txt",
+                   ggml::hrx::format_verification_errors(verification.errors));
 
         std::cout << "dumped " << plan.schedule.workload << " graph=" << graph.fingerprint
                   << " dispatches=" << ggml::hrx::schedule_dispatch_count(plan.schedule)
-                  << " commands=" << commands.commands.size()
-                  << " valid=" << (verification.valid() ? "true" : "false")
+                  << " commands=" << commands.commands.size() << " valid=" << (verification.valid() ? "true" : "false")
                   << " to " << output_directory << '\n';
         return 0;
     } catch (const std::exception & error) {

@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
 import argparse
-import hashlib
 import json
 import pathlib
 import re
@@ -14,16 +13,16 @@ DEFAULT_KERNEL_FAMILY = "qwen3_moe"
 SOURCE_ARRAY_TEMPLATE = """static const unsigned char {symbol}[] = {{
 {bytes}
 }};
-static constexpr size_t {symbol}Size = {size};
+static constexpr size_t {symbol}_size = {size};
 """
 
-DEPENDENCY_TABLE_TEMPLATE = """static const KernelSourceSpan {dependency_table}[] = {{
+DEPENDENCY_TABLE_TEMPLATE = """static const kernel_source_span {dependency_table}[] = {{
 {dependencies}
 }};
 """
 
-SOURCE_RECORD_TEMPLATE = """static const KernelSource {record} = {{
-    {{ reinterpret_cast<const char *>({source_symbol}), {source_symbol}Size, KERNEL_SOURCE_FORMAT_TEXT }},
+SOURCE_RECORD_TEMPLATE = """static const kernel_source {record} = {{
+    {{ reinterpret_cast<const char *>({source_symbol}), {source_symbol}_size, KERNEL_SOURCE_FORMAT_TEXT }},
     {dependency_table},
     {dependency_count},
 }};
@@ -46,7 +45,6 @@ KERNEL_RECORD_TEMPLATE = """    {{
         {{ nullptr, 0 }},
         {scalar_parameters},
         {bindings},
-        {source_digest},
         {workload_parameters},
         {launch_parameters},
         {{
@@ -60,37 +58,35 @@ KERNEL_RECORD_TEMPLATE = """    {{
 SOURCE_DATA_TEMPLATE = """{source_arrays}
 {dependency_tables}
 {source_records}
-static const KernelSourceRecordEntry kKernelSourceRecords[] = {{
+static const kernel_source_record_entry kernel_source_records[] = {{
 {lookup_entries}
 }};
 """
 
 CORPUS_DATA_TEMPLATE = """{kernel_arrays}
-static const KernelDefinition kQwenKernelDefinitions[] = {{
+static const kernel_definition qwen_kernel_definitions[] = {{
 {kernel_records}
 }};
 
-static const KernelCorpus kQwenKernelCorpus = {{
+static const kernel_corpus qwen_kernel_corpus = {{
     "ggml-hrx-kernel-corpus-v2",
     {upstream_revision},
-    {corpus_digest},
-    {recipe_digest},
     {plan_case_count},
-    {{ kQwenKernelDefinitions, {kernel_count} }},
+    {{ qwen_kernel_definitions, {kernel_count} }},
 }};
 """
 
-CATALOG_DATA_TEMPLATE = """struct KernelCatalogEntry {{
+CATALOG_DATA_TEMPLATE = """struct kernel_catalog_entry {{
     const char * family;
     const char * name;
 }};
 
-static constexpr KernelCatalogEntry kKernelCatalogEntries[] = {{
+static constexpr kernel_catalog_entry kernel_catalog_entries[] = {{
 {kernel_entries}
 }};
 
 constexpr bool kernel_catalog_entry_exists(const char * family, const char * name) {{
-    for (const KernelCatalogEntry & known : kKernelCatalogEntries) {{
+    for (const kernel_catalog_entry & known : kernel_catalog_entries) {{
         if (kernel_catalog_name_equal(family, known.family) && kernel_catalog_name_equal(name, known.name)) {{
             return true;
         }}
@@ -99,10 +95,10 @@ constexpr bool kernel_catalog_entry_exists(const char * family, const char * nam
 }}
 
 constexpr bool kernel_catalog_ids_are_unique() {{
-    for (size_t i = 0; i < sizeof(kKernelCatalogEntries) / sizeof(kKernelCatalogEntries[0]); ++i) {{
-        for (size_t j = i + 1; j < sizeof(kKernelCatalogEntries) / sizeof(kKernelCatalogEntries[0]); ++j) {{
-            if (kernel_catalog_id(kKernelCatalogEntries[i].family, kKernelCatalogEntries[i].name) ==
-                kernel_catalog_id(kKernelCatalogEntries[j].family, kKernelCatalogEntries[j].name)) {{
+    for (size_t i = 0; i < sizeof(kernel_catalog_entries) / sizeof(kernel_catalog_entries[0]); ++i) {{
+        for (size_t j = i + 1; j < sizeof(kernel_catalog_entries) / sizeof(kernel_catalog_entries[0]); ++j) {{
+            if (kernel_catalog_id(kernel_catalog_entries[i].family, kernel_catalog_entries[i].name) ==
+                kernel_catalog_id(kernel_catalog_entries[j].family, kernel_catalog_entries[j].name)) {{
                 return false;
             }}
         }}
@@ -200,7 +196,7 @@ def source_ref_array(symbol: str, items: Iterable[str], source_records: Dict[str
         "{ " + cpp_string(item) + ", &" + source_records[item] + " }"
         for item in items
     ]
-    return typed_array(symbol, "const KernelSourceRef", values)
+    return typed_array(symbol, "const kernel_source_ref", values)
 
 
 def scalar_array(symbol: str, items: Iterable[dict]) -> Tuple[str, str]:
@@ -208,7 +204,7 @@ def scalar_array(symbol: str, items: Iterable[dict]) -> Tuple[str, str]:
         "{ " + cpp_string(item["name"]) + ", " + cpp_string(item["type"]) + " }"
         for item in items
     ]
-    return typed_array(symbol, "const KernelScalarDefinition", values)
+    return typed_array(symbol, "const kernel_scalar_definition", values)
 
 
 def binding_array(symbol: str, names: List[str], access: List[str]) -> Tuple[str, str]:
@@ -218,7 +214,7 @@ def binding_array(symbol: str, names: List[str], access: List[str]) -> Tuple[str
         "{ " + cpp_string(name) + ", " + resource_access_value(access_value) + " }"
         for name, access_value in zip(names, access)
     ]
-    return typed_array(symbol, "const KernelBindingDefinition", values)
+    return typed_array(symbol, "const kernel_binding_definition", values)
 
 
 def scalar_parameter_names(workload_parameters: List[dict], launch_parameters: List[dict]) -> List[str]:
@@ -257,16 +253,7 @@ def collect_sources(manifest: dict) -> Tuple[List[str], Dict[str, List[str]]]:
     return sorted(all_sources), source_dependencies
 
 
-def manifest_file_digests(manifest: dict) -> Dict[str, str]:
-    return {file["path"]: file["sha256"] for file in manifest.get("files", [])}
-
-
-def sha256(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
-
-
 def generate_corpus_records(manifest: dict, source_records: Dict[str, str]) -> Tuple[str, str, int]:
-    digests = manifest_file_digests(manifest)
     arrays = []
     records = []
     exports = manifest.get("exports", [])
@@ -279,20 +266,20 @@ def generate_corpus_records(manifest: dict, source_records: Dict[str, str]) -> T
         workload_parameters = list(export["workload_parameters"])
         launch_parameters = list(export["launch_parameters"])
 
-        dependencies_array, dependencies_span = string_array(f"kKernelDependencies{index}", dependencies)
+        dependencies_array, dependencies_span = string_array(f"kernel_dependencies_{index}", dependencies)
         scalar_array_text, scalar_span = string_array(
-            f"kKernelScalarParameters{index}",
+            f"kernel_scalar_parameters_{index}",
             scalar_parameter_names(workload_parameters, launch_parameters),
         )
         bindings_array, bindings_span = binding_array(
-            f"kKernelBindings{index}",
+            f"kernel_bindings_{index}",
             list(export["bindings"]),
             list(export.get("binding_access", [])),
         )
-        workload_array, workload_span = scalar_array(f"kKernelWorkloadParameters{index}", workload_parameters)
-        launch_array, launch_span = scalar_array(f"kKernelLaunchParameters{index}", launch_parameters)
-        primary_array, primary_span = source_ref_array(f"kKernelPrimarySources{index}", recipe["primary_sources"], source_records)
-        library_array, library_span = source_ref_array(f"kKernelLibrarySources{index}", library_sources, source_records)
+        workload_array, workload_span = scalar_array(f"kernel_workload_parameters_{index}", workload_parameters)
+        launch_array, launch_span = scalar_array(f"kernel_launch_parameters_{index}", launch_parameters)
+        primary_array, primary_span = source_ref_array(f"kernel_primary_sources_{index}", recipe["primary_sources"], source_records)
+        library_array, library_span = source_ref_array(f"kernel_library_sources_{index}", library_sources, source_records)
         arrays.extend(
             item for item in [
                 dependencies_array,
@@ -312,7 +299,6 @@ def generate_corpus_records(manifest: dict, source_records: Dict[str, str]) -> T
                 target_selector=cpp_string(export.get("target_selector", "")),
                 source=cpp_string(export["source"]),
                 dependencies=dependencies_span,
-                source_digest=cpp_string(digests[export["source"]]),
                 scalar_parameters=scalar_span,
                 bindings=bindings_span,
                 workload_parameters=workload_span,
@@ -342,7 +328,6 @@ def generate_catalog_verifier(manifest: dict) -> str:
 def generate_includes(args: argparse.Namespace, manifest: dict) -> Tuple[str, str, str, List[pathlib.Path], int]:
     corpus_dir = args.corpus_dir
     sources, source_dependencies = collect_sources(manifest)
-    digests = manifest_file_digests(manifest)
     source_bytes: Dict[str, bytes] = {}
     input_files: List[pathlib.Path] = []
 
@@ -353,15 +338,9 @@ def generate_includes(args: argparse.Namespace, manifest: dict) -> Tuple[str, st
                 raise RuntimeError(f"export primary source is not embedded: {primary}")
 
     for source in sources:
-        if source not in digests:
-            raise RuntimeError(f"embedded source is missing from manifest file table: {source}")
         path = corpus_dir / source
         input_files.append(path)
-        data = read_bytes(path)
-        digest = sha256(data)
-        if digest != digests[source]:
-            raise RuntimeError(f"manifest digest mismatch for {source}: got {digest}, expected {digests[source]}")
-        source_bytes[source] = data
+        source_bytes[source] = read_bytes(path)
 
     source_symbols: Dict[str, str] = {}
     source_arrays = []
@@ -391,7 +370,7 @@ def generate_includes(args: argparse.Namespace, manifest: dict) -> Tuple[str, st
             for dependency in dependencies:
                 symbol = source_symbols[dependency]
                 entries.append(
-                    f"    {{ reinterpret_cast<const char *>({symbol}), {symbol}Size, KERNEL_SOURCE_FORMAT_TEXT }},"
+                    f"    {{ reinterpret_cast<const char *>({symbol}), {symbol}_size, KERNEL_SOURCE_FORMAT_TEXT }},"
                 )
             dependency_tables.append(
                 DEPENDENCY_TABLE_TEMPLATE.format(
@@ -424,8 +403,6 @@ def generate_includes(args: argparse.Namespace, manifest: dict) -> Tuple[str, st
             kernel_arrays=kernel_arrays,
             kernel_records=kernel_records,
             upstream_revision=cpp_string(manifest["upstream_revision"]),
-            corpus_digest=cpp_string(manifest["corpus_sha256"]),
-            recipe_digest=cpp_string(manifest["build_bazel_sha256"]),
             plan_case_count=len(manifest["plan_cases"]),
             kernel_count=kernel_count,
         ),

@@ -150,8 +150,7 @@ static std::vector<Command> expand_synthetic_commands(const std::vector<Command>
 }
 
 static std::string stable_hash(const std::string & text) {
-    // FNV-1a is used only as an in-process cache witness. Source provenance
-    // manifests retain their cryptographic SHA-256 digests separately.
+    // FNV-1a is used only as an in-process cache witness.
     uint64_t hash = UINT64_C(1469598103934665603);
     for (unsigned char byte : text) {
         hash ^= byte;
@@ -342,13 +341,12 @@ const char * resource_access_name(ResourceAccess access) {
     return "unknown";
 }
 
-CommandProgram build_command_program(const ProgramPlan & plan, const KernelCorpus & corpus) {
+CommandProgram build_command_program(const ProgramPlan & plan, const kernel_corpus & corpus) {
     CommandProgram result;
     result.workload = plan.schedule.workload;
     result.target = plan.target;
     result.graph_fingerprint = plan.graph.fingerprint;
     result.recipe_revision = plan.schedule.oracle_revision;
-    result.corpus_digest = corpus.corpus_digest;
     result.roots = plan.schedule.roots;
     const VerificationResult corpus_verification = verify_kernel_corpus(corpus);
     result.errors.insert(result.errors.end(), corpus_verification.errors.begin(), corpus_verification.errors.end());
@@ -362,8 +360,8 @@ CommandProgram build_command_program(const ProgramPlan & plan, const KernelCorpu
             command.label = invocation.stage + (invocation.layer >= 0 ? "." + std::to_string(invocation.layer) : "");
             command.kernel = dispatch.kernel;
             command.dependencies = dispatch.dependencies;
-            const KernelResolveResult resolved = resolve_kernel_definition(corpus, plan.target, command.kernel);
-            const KernelDefinition * definition = resolved.definition;
+            const kernel_resolve_result resolved = resolve_kernel_definition(corpus, plan.target, command.kernel);
+            const kernel_definition * definition = resolved.definition;
             if (!resolved.found()) {
                 result.errors.push_back(format_kernel_resolve_error(resolved, command.kernel));
             }
@@ -452,13 +450,13 @@ CommandProgram build_command_program(const ProgramPlan & plan, const KernelCorpu
     return result;
 }
 
-VerificationResult verify_command_program(const ProgramPlan & plan, const KernelCorpus & corpus,
+VerificationResult verify_command_program(const ProgramPlan & plan, const kernel_corpus & corpus,
                                           const CommandProgram & commands) {
     VerificationResult result;
     if (!commands.valid()) result.errors.insert(result.errors.end(), commands.errors.begin(), commands.errors.end());
     if (commands.graph_fingerprint != plan.graph.fingerprint || commands.workload != plan.schedule.workload ||
-        commands.target != plan.target || commands.corpus_digest != corpus.corpus_digest) {
-        result.errors.push_back("command program identity does not match its plan or corpus");
+        commands.target != plan.target) {
+        result.errors.push_back("command program identity does not match its plan");
     }
     const size_t kernel_count = std::count_if(commands.commands.begin(), commands.commands.end(), [](const Command & command) {
         return command.kind == CommandKind::Kernel;
@@ -469,8 +467,8 @@ VerificationResult verify_command_program(const ProgramPlan & plan, const Kernel
     for (size_t i = 0; i < commands.commands.size(); ++i) {
         const Command & command = commands.commands[i];
         if (command.ordinal != i) result.errors.push_back("command ordinals are not contiguous");
-        KernelResolveResult resolved;
-        const KernelDefinition * definition = nullptr;
+        kernel_resolve_result resolved;
+        const kernel_definition * definition = nullptr;
         if (command.kind == CommandKind::Kernel) {
             resolved = resolve_kernel_definition(corpus, commands.target, command.kernel);
             definition = resolved.definition;
@@ -654,7 +652,7 @@ std::string format_command_program(const CommandProgram & program) {
     std::ostringstream out;
     out << "command-program " << program.schema << " workload=" << program.workload << " target=" << program.target
         << " graph=" << program.graph_fingerprint << " recipe=" << program.recipe_revision
-        << " corpus=" << program.corpus_digest << " commands=" << program.commands.size() << '\n';
+        << " commands=" << program.commands.size() << '\n';
     for (const Command & command : program.commands) {
         out << "  command " << command.ordinal << ' ' << command_kind_name(command.kind) << ' '
             << kernel_specialization_name(command.kernel)
@@ -743,8 +741,7 @@ std::string serialize_command_program_json(const CommandProgram & program) {
     nlohmann::ordered_json root = {
         { "schema", program.schema }, { "workload", program.workload }, { "target", program.target },
         { "graph_fingerprint", program.graph_fingerprint }, { "recipe_revision", program.recipe_revision },
-        { "corpus_digest", program.corpus_digest }, { "commands", nlohmann::ordered_json::array() },
-        { "initializations", nlohmann::ordered_json::array() },
+        { "commands", nlohmann::ordered_json::array() }, { "initializations", nlohmann::ordered_json::array() },
         { "transients", { { "arena_size", program.transients.arena_size },
             { "arena_alignment", program.transients.arena_alignment }, { "allocations", nlohmann::ordered_json::array() } } },
         { "persistent_constants", { { "arena_size", program.persistent_constants.arena_size },

@@ -5,7 +5,7 @@
 
 namespace ggml::hrx {
 
-static constexpr uint64_t kUncatalogedKernelId = 0;
+static constexpr uint64_t GGML_HRX_KERNEL_ID_UNCATALOGED = 0;
 
 constexpr bool kernel_catalog_name_equal(const char * lhs, const char * rhs) {
     while (*lhs != 0 && *rhs != 0) {
@@ -35,21 +35,22 @@ constexpr uint64_t kernel_catalog_id(const char * family, const char * name) {
     return hash;
 }
 
-struct KernelCatalogRef {
+struct kernel_catalog_reference {
     const char * family = "";
-    const char * name = "";
-    uint64_t     id     = kUncatalogedKernelId;
+    const char * name   = "";
+    uint64_t     id     = GGML_HRX_KERNEL_ID_UNCATALOGED;
 
     constexpr bool valid() const {
-        return id != kUncatalogedKernelId && family != nullptr && family[0] != 0 && name != nullptr && name[0] != 0;
+        return id != GGML_HRX_KERNEL_ID_UNCATALOGED && family != nullptr && family[0] != 0 && name != nullptr &&
+               name[0] != 0;
     }
 };
 
-constexpr KernelCatalogRef kernel_catalog_ref(const char * family, const char * name) {
+constexpr kernel_catalog_reference kernel_catalog_ref(const char * family, const char * name) {
     return {
         family,
         name,
-        family != nullptr && name != nullptr ? kernel_catalog_id(family, name) : kUncatalogedKernelId,
+        family != nullptr && name != nullptr ? kernel_catalog_id(family, name) : GGML_HRX_KERNEL_ID_UNCATALOGED,
     };
 }
 

@@ -232,8 +232,6 @@ def main() -> int:
         "target": args.target,
         "hsa_override_gfx_version": override,
         "hrx_revision": revision,
-        "corpus_digest": manifest["corpus_sha256"],
-        "recipe_digest": manifest["build_bazel_sha256"],
         "plan_case_count": len(manifest["plan_cases"]),
         "planned_invocation_count": planned_invocation_count,
         "resolved_invocation_count": resolved_invocation_count,

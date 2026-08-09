@@ -90,7 +90,6 @@ struct CommandProgram {
     std::string target;
     std::string graph_fingerprint;
     std::string recipe_revision;
-    std::string corpus_digest;
     std::vector<Command> commands;
     TransientPlan transients;
     PersistentConstantPlan persistent_constants;
@@ -122,8 +121,8 @@ struct AllocationFingerprint {
     bool operator!=(const AllocationFingerprint & other) const { return !(*this == other); }
 };
 
-CommandProgram build_command_program(const ProgramPlan & plan, const KernelCorpus & corpus);
-VerificationResult verify_command_program(const ProgramPlan & plan, const KernelCorpus & corpus,
+CommandProgram build_command_program(const ProgramPlan & plan, const kernel_corpus & corpus);
+VerificationResult verify_command_program(const ProgramPlan & plan, const kernel_corpus & corpus,
                                           const CommandProgram & commands);
 VerificationResult verify_binding_snapshot(const ProgramPlan & plan, const BindingSnapshot & snapshot);
 AllocationFingerprint fingerprint_bindings(const BindingSnapshot & snapshot);
