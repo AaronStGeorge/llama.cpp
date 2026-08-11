@@ -10,7 +10,7 @@
 // projection and routing independent without paying completion atomics.
 amdgpu.target<gfx11-generic> @qwen3_moe_router_fused_gfx11_wave64 {subgroup_size = 64}
 
-amdgpu.target<gfx1151> @qwen3_moe_router_fused_gfx1151_wave64 {subgroup_size = 64}
+amdgpu.target<gfx1151> @qwen3_moe_router_fused_gfx1151
 
 config.decl @qwen3_moe.model.hidden_size : %value: index where [range(%value, 128, 32768), mul(%value, 128)]
 
@@ -20,7 +20,7 @@ kernel.decl @qwen3_moe_router_projection_f32_four_row_wave32(%token_count: index
 
 kernel.decl @qwen3_moe_router_top8_f32(%token_count: index, %route_id_stride: index) launch(%token_count: index, %route_id_stride: index, %logits: buffer, %route_ids: buffer, %route_weights: buffer)
 
-func.template<qwen3_moe.router.fused.experts_per_wave> target(@qwen3_moe_router_fused_gfx1151_wave64) priority(20) @qwen3_moe_router_fused_two_experts_per_wave() -> (index) {
+func.template<qwen3_moe.router.fused.experts_per_wave> target(@qwen3_moe_router_fused_gfx1151) requires [#target.subgroup.size<64>] priority(20) @qwen3_moe_router_fused_two_experts_per_wave() -> (index) {
   %c2 = index.constant 2 : index
   func.return %c2 : index
 }
@@ -30,7 +30,7 @@ func.template<qwen3_moe.router.fused.experts_per_wave> priority(1) @qwen3_moe_ro
   func.return %c4 : index
 }
 
-func.template<qwen3_moe.router.fused.projection> device target(@qwen3_moe_router_fused_gfx1151_wave64) priority(20) @qwen3_moe_router_fused_two_expert_projection(%hidden_size: index, %expert_count: index, %token_count: index, %token: index, %expert_tile: index, %lane: index, %writes_projection: i1, %input: buffer, %weight: buffer, %logits: buffer) {
+func.template<qwen3_moe.router.fused.projection> device target(@qwen3_moe_router_fused_gfx1151) requires [#target.subgroup.size<64>] priority(20) @qwen3_moe_router_fused_two_expert_projection(%hidden_size: index, %expert_count: index, %token_count: index, %token: index, %expert_tile: index, %lane: index, %writes_projection: i1, %input: buffer, %weight: buffer, %logits: buffer) {
   %c0_offset = index.constant 0 : offset
   %c1 = index.constant 1 : index
   %c2 = index.constant 2 : index
