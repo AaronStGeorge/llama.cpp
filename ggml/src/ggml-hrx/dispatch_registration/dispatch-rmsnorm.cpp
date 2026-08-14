@@ -1,5 +1,6 @@
 #include "dispatch-rmsnorm.h"
 
+#include "dispatch-llm-profiles.h"
 #include "ggml.h"
 #include "kernel-corpus/kernel-corpus-catalog-verify.h"
 
@@ -16,8 +17,8 @@ static constexpr KernelCatalogRef kQwenRmsNormF32QuantizeQ8_1X4Kernel =
     GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_rmsnorm_f32_quantize_q8_1_x4");
 static constexpr KernelCatalogRef kGgmlLinearQ6KQ8_1X4Kernel =
     GGML_HRX_KERNEL_REF("qwen3_moe", "ggml_linear_q6k_q8_1_x4");
-static constexpr float   kQwenRmsNormEpsilon  = 0.000001f;
-static constexpr int64_t kQwenHiddenSize      = 2048;
+static constexpr float   kQwenRmsNormEpsilon  = kQwen30BMoeDispatchProfile.rms_norm_epsilon;
+static constexpr int64_t kQwenHiddenSize      = kQwen30BMoeDispatchProfile.hidden_size;
 static constexpr int64_t kQwenVocabularyCount = 151936;
 
 static const Value * graph_value(const Graph & graph, ValueId id) {
@@ -42,7 +43,7 @@ static bool is_supported_hidden_size(int64_t hidden_size) {
 }
 
 static bool is_supported_token_count(int64_t token_count) {
-    return token_count >= 1 && token_count <= 2048;
+    return is_llm_supported_query_length(kQwen30BMoeDispatchProfile, token_count);
 }
 
 static bool has_decode_q8_consumer(const Graph & graph, ValueId value) {

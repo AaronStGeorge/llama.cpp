@@ -14,16 +14,16 @@
 namespace ggml::hrx {
 
 enum class GeneratedResourceRole {
-    QwenMoeExpertTable,
-    QwenMoePartitionTable,
+    MoeExpertTable,
+    MoePartitionTable,
 };
 
 enum class CommandPlanResourceMetadataKind {
     None,
-    QwenMoeRoutingResource,
+    MoeRoutingResource,
 };
 
-struct QwenMoeRoutingResourceMetadata {
+struct MoeRoutingResourceMetadata {
     int64_t token_count  = 0;
     int64_t route_count  = 0;
     int64_t route_stride = 0;
@@ -36,8 +36,8 @@ template <typename T> constexpr CommandPlanResourceMetadataKind command_plan_res
 }
 
 template <>
-constexpr CommandPlanResourceMetadataKind command_plan_resource_metadata_kind<QwenMoeRoutingResourceMetadata>() {
-    return CommandPlanResourceMetadataKind::QwenMoeRoutingResource;
+constexpr CommandPlanResourceMetadataKind command_plan_resource_metadata_kind<MoeRoutingResourceMetadata>() {
+    return CommandPlanResourceMetadataKind::MoeRoutingResource;
 }
 
 struct CommandPlanResourceMetadata {
@@ -70,7 +70,7 @@ template <typename T> CommandPlanResourceMetadata make_command_plan_resource_met
 
 struct CommandPlanGeneratedResource {
     ValueId                     source_value;
-    GeneratedResourceRole       role = GeneratedResourceRole::QwenMoeExpertTable;
+    GeneratedResourceRole       role = GeneratedResourceRole::MoeExpertTable;
     ValueId                     generated_value;
     size_t                      byte_count = 0;
     CommandPlanResourceMetadata metadata;
@@ -84,7 +84,7 @@ struct CommandPlanAlternateValue {
     std::string name;
 };
 
-struct CommandPlanQwenRoutingBundle {
+struct CommandPlanMoeRoutingBundle {
     ValueId route_ids;
     ValueId route_weights;
     ValueId expert_table;
@@ -107,7 +107,7 @@ class CommandPlanMetadata {
 
     bool append_alternate_value(CommandPlanAlternateValue alternate, Status & status);
 
-    bool append_qwen_routing_bundle(CommandPlanQwenRoutingBundle bundle, Status & status);
+    bool append_moe_routing_bundle(CommandPlanMoeRoutingBundle bundle, Status & status);
 
     const CommandPlanGeneratedResource * find_generated_resource(ValueId               source_value,
                                                                  GeneratedResourceRole role) const;
@@ -118,18 +118,18 @@ class CommandPlanMetadata {
                                                            ggml_type type,
                                                            size_t    byte_count) const;
 
-    const CommandPlanQwenRoutingBundle * find_qwen_routing_bundle(ValueId route_ids) const;
+    const CommandPlanMoeRoutingBundle * find_moe_routing_bundle(ValueId route_ids) const;
 
     const std::vector<CommandPlanGeneratedResource> & generated_resources() const { return generated_resources_; }
 
     const std::vector<CommandPlanAlternateValue> & alternate_values() const { return alternate_values_; }
 
-    const std::vector<CommandPlanQwenRoutingBundle> & qwen_routing_bundles() const { return qwen_routing_bundles_; }
+    const std::vector<CommandPlanMoeRoutingBundle> & moe_routing_bundles() const { return moe_routing_bundles_; }
 
   private:
     std::vector<CommandPlanGeneratedResource> generated_resources_;
     std::vector<CommandPlanAlternateValue>    alternate_values_;
-    std::vector<CommandPlanQwenRoutingBundle> qwen_routing_bundles_;
+    std::vector<CommandPlanMoeRoutingBundle>  moe_routing_bundles_;
 };
 
 }  // namespace ggml::hrx

@@ -22,8 +22,8 @@ static bool alternate_value_matches(const CommandPlanAlternateValue & lhs, const
            lhs.byte_count == rhs.byte_count && lhs.name == rhs.name;
 }
 
-static bool qwen_routing_bundle_matches(const CommandPlanQwenRoutingBundle & lhs,
-                                        const CommandPlanQwenRoutingBundle & rhs) {
+static bool moe_routing_bundle_matches(const CommandPlanMoeRoutingBundle & lhs,
+                                       const CommandPlanMoeRoutingBundle & rhs) {
     return lhs.route_ids == rhs.route_ids && lhs.route_weights == rhs.route_weights &&
            lhs.expert_table == rhs.expert_table && lhs.partition_table == rhs.partition_table &&
            lhs.expert_table_byte_count == rhs.expert_table_byte_count &&
@@ -37,7 +37,7 @@ static bool qwen_routing_bundle_matches(const CommandPlanQwenRoutingBundle & lhs
 void CommandPlanMetadata::clear() {
     generated_resources_.clear();
     alternate_values_.clear();
-    qwen_routing_bundles_.clear();
+    moe_routing_bundles_.clear();
 }
 
 bool CommandPlanMetadata::append(CommandPlanMetadata && other, Status & status) {
@@ -51,8 +51,8 @@ bool CommandPlanMetadata::append(CommandPlanMetadata && other, Status & status) 
             return false;
         }
     }
-    for (CommandPlanQwenRoutingBundle & bundle : other.qwen_routing_bundles_) {
-        if (!append_qwen_routing_bundle(std::move(bundle), status)) {
+    for (CommandPlanMoeRoutingBundle & bundle : other.moe_routing_bundles_) {
+        if (!append_moe_routing_bundle(std::move(bundle), status)) {
             return false;
         }
     }
@@ -88,17 +88,17 @@ bool CommandPlanMetadata::append_alternate_value(CommandPlanAlternateValue alter
     return true;
 }
 
-bool CommandPlanMetadata::append_qwen_routing_bundle(CommandPlanQwenRoutingBundle bundle, Status & status) {
-    for (const CommandPlanQwenRoutingBundle & existing : qwen_routing_bundles_) {
+bool CommandPlanMetadata::append_moe_routing_bundle(CommandPlanMoeRoutingBundle bundle, Status & status) {
+    for (const CommandPlanMoeRoutingBundle & existing : moe_routing_bundles_) {
         if (existing.route_ids == bundle.route_ids) {
-            if (qwen_routing_bundle_matches(existing, bundle)) {
+            if (moe_routing_bundle_matches(existing, bundle)) {
                 return true;
             }
-            status.log("conflicting Qwen routing bundle for route ids value %d", bundle.route_ids.value);
+            status.log("conflicting MoE routing bundle for route ids value %d", bundle.route_ids.value);
             return false;
         }
     }
-    qwen_routing_bundles_.push_back(std::move(bundle));
+    moe_routing_bundles_.push_back(std::move(bundle));
     return true;
 }
 
@@ -131,8 +131,8 @@ const CommandPlanAlternateValue * CommandPlanMetadata::find_alternate_value(Valu
     return alternate;
 }
 
-const CommandPlanQwenRoutingBundle * CommandPlanMetadata::find_qwen_routing_bundle(ValueId route_ids) const {
-    for (const CommandPlanQwenRoutingBundle & bundle : qwen_routing_bundles_) {
+const CommandPlanMoeRoutingBundle * CommandPlanMetadata::find_moe_routing_bundle(ValueId route_ids) const {
+    for (const CommandPlanMoeRoutingBundle & bundle : moe_routing_bundles_) {
         if (bundle.route_ids == route_ids) {
             return &bundle;
         }

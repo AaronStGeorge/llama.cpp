@@ -1,19 +1,21 @@
 #pragma once
 
+#include "dispatch-llm-profiles.h"
+
 #include <cstdint>
 
 namespace ggml::hrx {
 
 constexpr bool is_qwen_supported_query_length(int64_t query_length) {
-    return query_length >= 1 && query_length <= 2048;
+    return is_llm_supported_query_length(kQwen30BMoeDispatchProfile, query_length);
 }
 
 constexpr bool is_qwen_decode_query_length(int64_t query_length) {
-    return query_length == 1;
+    return is_llm_decode_query_length(query_length);
 }
 
 constexpr bool is_qwen_prefill_query_length(int64_t query_length) {
-    return query_length > 1 && query_length <= 2048;
+    return is_llm_prefill_query_length(kQwen30BMoeDispatchProfile, query_length);
 }
 
 constexpr bool is_qwen_prefill_512_query_length(int64_t query_length) {

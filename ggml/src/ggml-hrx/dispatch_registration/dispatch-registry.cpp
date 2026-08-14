@@ -30,7 +30,7 @@ static void sort_registrations(std::vector<DispatchRegistration> & registrations
         [](const DispatchRegistration & lhs, const DispatchRegistration & rhs) { return lhs.priority > rhs.priority; });
 }
 
-static DispatchRegistry build_qwen_registry() {
+static DispatchRegistry build_llm_registry() {
     DispatchRegistryBuilder builder;
     register_add_dispatch(builder);
     register_gather_add_dispatch(builder);
@@ -136,8 +136,8 @@ DispatchRegistry DispatchRegistryBuilder::build() {
 }
 
 const DispatchRegistry * find_dispatch_registry(const DispatchTarget & target) {
-    static const DispatchRegistry gfx1100_registry = build_qwen_registry();
-    static const DispatchRegistry gfx1151_registry = build_qwen_registry();
+    static const DispatchRegistry gfx1100_registry = build_llm_registry();
+    static const DispatchRegistry gfx1151_registry = build_llm_registry();
 
     if (target.architecture == "gfx1100") {
         return &gfx1100_registry;

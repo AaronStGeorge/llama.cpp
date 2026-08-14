@@ -33,10 +33,10 @@ static constexpr KernelCatalogRef kQwenRoutedDownWeightedReduceF16F32Kernel =
 static constexpr KernelCatalogRef kQwenRoutedDownWeightedReduceNextRmsNormF32Kernel =
     GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_f32");
 
-static constexpr int64_t      kQwenMoeInputSize               = 2048;
-static constexpr int64_t      kQwenMoeOutputSize              = 768;
-static constexpr int64_t      kQwenMoeExpertCount             = 128;
-static constexpr int64_t      kQwenMoeRouteCount              = 8;
+static constexpr int64_t      kQwenMoeInputSize               = kQwen30BMoeDispatchProfile.hidden_size;
+static constexpr int64_t      kQwenMoeOutputSize              = kQwen30BMoeDispatchProfile.expert_hidden_size;
+static constexpr int64_t      kQwenMoeExpertCount             = kQwen30BMoeDispatchProfile.expert_count;
+static constexpr int64_t      kQwenMoeRouteCount              = kQwen30BMoeDispatchProfile.route_count;
 static constexpr size_t       kQwenMoePlanTransientAlignment  = 256;
 static constexpr const char * kQwenMoeF16GateUpOutputName     = "qwen.moe.gate_up_swiglu_f16";
 static constexpr const char * kQwenMoeF16RoutedDownOutputName = "qwen.moe.routed_down_f16";
@@ -61,7 +61,8 @@ static bool same_shape(const Value & lhs, const Value & rhs) {
 }
 
 static bool is_qwen_rms_norm_epsilon(float eps) {
-    return eps >= 0.0000009f && eps <= 0.0000011f;
+    const float expected = kQwen30BMoeDispatchProfile.rms_norm_epsilon;
+    return eps >= expected * 0.9f && eps <= expected * 1.1f;
 }
 
 static bool is_qwen_routed_weight(const Value & value) {
@@ -169,7 +170,7 @@ struct RoutedGateUpMatch {
     const Value *                        gate_output    = nullptr;
     const Value *                        up_output      = nullptr;
     const Value *                        glu_output     = nullptr;
-    const CommandPlanQwenRoutingBundle * routing_bundle = nullptr;
+    const CommandPlanMoeRoutingBundle * routing_bundle = nullptr;
     const GraphNode *                    gate_node      = nullptr;
     const GraphNode *                    up_node        = nullptr;
     const GraphNode *                    glu_node       = nullptr;
@@ -212,7 +213,7 @@ struct RoutedDownMatch {
     const Value *                        weight            = nullptr;
     const Value *                        output            = nullptr;
     const Value *                        route_ids         = nullptr;
-    const CommandPlanQwenRoutingBundle * routing_bundle    = nullptr;
+    const CommandPlanMoeRoutingBundle * routing_bundle    = nullptr;
     KernelCatalogRef                     kernel            = {};
     int64_t                              token_count       = 0;
 
@@ -274,9 +275,9 @@ struct DecodeRoutedDownMatch {
     }
 };
 
-static bool bundle_matches_qwen_router(const CommandPlanQwenRoutingBundle & bundle,
-                                       ValueId                              route_ids,
-                                       int64_t                              token_count) {
+static bool bundle_matches_moe_routing(const CommandPlanMoeRoutingBundle & bundle,
+                                       ValueId                             route_ids,
+                                       int64_t                             token_count) {
     return bundle.route_ids == route_ids && bundle.route_weights.value >= 0 && bundle.expert_table.value >= 0 &&
            bundle.partition_table.value >= 0 && bundle.expert_table_byte_count == expert_table_size(token_count) &&
            bundle.partition_table_byte_count == partition_table_size(token_count) &&
@@ -323,8 +324,8 @@ static RoutedDownMatch match_qwen_routed_down_grouped(const DispatchMatchContext
         return {};
     }
 
-    const CommandPlanQwenRoutingBundle * routing_bundle = context.plan.metadata.find_qwen_routing_bundle(route_ids->id);
-    if (routing_bundle == nullptr || !bundle_matches_qwen_router(*routing_bundle, route_ids->id, token_count)) {
+    const CommandPlanMoeRoutingBundle * routing_bundle = context.plan.metadata.find_moe_routing_bundle(route_ids->id);
+    if (routing_bundle == nullptr || !bundle_matches_moe_routing(*routing_bundle, route_ids->id, token_count)) {
         return {};
     }
 
@@ -369,8 +370,8 @@ static RoutedGateUpMatch match_qwen_routed_gate_up_swiglu(const DispatchMatchCon
         return {};
     }
 
-    const CommandPlanQwenRoutingBundle * routing_bundle = context.plan.metadata.find_qwen_routing_bundle(route_ids->id);
-    if (routing_bundle == nullptr || !bundle_matches_qwen_router(*routing_bundle, route_ids->id, token_count)) {
+    const CommandPlanMoeRoutingBundle * routing_bundle = context.plan.metadata.find_moe_routing_bundle(route_ids->id);
+    if (routing_bundle == nullptr || !bundle_matches_moe_routing(*routing_bundle, route_ids->id, token_count)) {
         return {};
     }
 
@@ -791,9 +792,9 @@ static WeightedReduceMatch match_qwen_routed_down_weighted_reduce(const Dispatch
     }
 
     bool known_route_weights = false;
-    for (const CommandPlanQwenRoutingBundle & bundle : context.plan.metadata.qwen_routing_bundles()) {
+    for (const CommandPlanMoeRoutingBundle & bundle : context.plan.metadata.moe_routing_bundles()) {
         if (bundle.route_weights == route_weights->id &&
-            bundle_matches_qwen_router(bundle, bundle.route_ids, token_count)) {
+            bundle_matches_moe_routing(bundle, bundle.route_ids, token_count)) {
             known_route_weights = true;
             break;
         }

@@ -23,8 +23,8 @@ static constexpr KernelCatalogRef kGgmlLinearQ6KQ8_1X4Kernel =
 static constexpr KernelCatalogRef kQwenRouterProjectionF32FourRowWave32Kernel =
     GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_router_projection_f32_four_row_wave32");
 
-static constexpr int64_t kQwenHiddenSize        = 2048;
-static constexpr int64_t kQwenRouterExpertCount = 128;
+static constexpr int64_t kQwenHiddenSize        = kQwen30BMoeDispatchProfile.hidden_size;
+static constexpr int64_t kQwenRouterExpertCount = kQwen30BMoeDispatchProfile.expert_count;
 static constexpr int64_t kQwenVocabularyCount   = 151936;
 
 static const Value * graph_value(const Graph & graph, ValueId id) {

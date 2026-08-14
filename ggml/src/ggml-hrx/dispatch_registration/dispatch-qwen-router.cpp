@@ -177,8 +177,9 @@ struct RouterTop8Match {
 
 static bool supports_fused_prefill_expert_table_partition(const RouterTop8Match & router_match) {
     // Matches the reference prefill recipe gate; q=1 uses decode routing paths.
-    return is_qwen_prefill_512_query_length(router_match.token_count) && router_match.route_count == 8 &&
-           router_match.expert_count == 128;
+    return is_qwen_prefill_512_query_length(router_match.token_count) &&
+           router_match.route_count == kQwen30BMoeDispatchProfile.route_count &&
+           router_match.expert_count == kQwen30BMoeDispatchProfile.expert_count;
 }
 
 static RouterTop8Match match_qwen_router_top8(const Graph & graph, const GraphNode * softmax_node, Status * status) {
@@ -380,8 +381,9 @@ static RouterProjectionTop8Match match_qwen_router_projection_top8_decode(const 
     const Value * logits = graph_value(context.graph, projection->output);
     if (weight == nullptr || input == nullptr || logits == nullptr || weight->type != GGML_TYPE_F32 ||
         input->type != GGML_TYPE_F32 || logits->type != GGML_TYPE_F32 || !weight->contiguous || !input->contiguous ||
-        !logits->contiguous || !is_shape(*input, 2048, 1, 1, 1) || !is_shape(*weight, 2048, 128, 1, 1) ||
-        !is_shape(*logits, 128, 1, 1, 1)) {
+        !logits->contiguous || !is_shape(*input, kQwen30BMoeDispatchProfile.hidden_size, 1, 1, 1) ||
+        !is_shape(*weight, kQwen30BMoeDispatchProfile.hidden_size, kQwen30BMoeDispatchProfile.expert_count, 1, 1) ||
+        !is_shape(*logits, kQwen30BMoeDispatchProfile.expert_count, 1, 1, 1)) {
         return {};
     }
 
@@ -414,7 +416,8 @@ static bool match_qwen_router_projection_top8_fused_decode_dispatch(const Dispat
     dispatch.kernel = make_kernel_specialization(kQwenRouterProjectionTop8FusedDecodeF32Kernel);
     dispatch.kernel.integer_parameters.emplace("token_count", match.top8.token_count);
     dispatch.kernel.integer_parameters.emplace("route_id_stride", match.top8.route_stride);
-    dispatch.kernel.compile_parameters.emplace("qwen3_moe.model.hidden_size", "2048");
+    dispatch.kernel.compile_parameters.emplace("qwen3_moe.model.hidden_size",
+                                               to_config_value(kQwen30BMoeDispatchProfile.hidden_size));
     dispatch.kernel.compile_parameters.emplace("qwen3_moe.router.expert_count",
                                                to_config_value(match.top8.expert_count));
     dispatch.kernel.compile_parameters.emplace("qwen3_moe.router.route_count", to_config_value(match.top8.route_count));
@@ -491,7 +494,7 @@ static bool match_qwen_router_top8_dispatch(const DispatchMatchContext & context
         });
     }
     const CommandPlanResourceMetadata routing_metadata =
-        make_command_plan_resource_metadata(QwenMoeRoutingResourceMetadata{
+        make_command_plan_resource_metadata(MoeRoutingResourceMetadata{
             router_match.token_count,
             router_match.route_count,
             router_match.route_stride,
@@ -501,7 +504,7 @@ static bool match_qwen_router_top8_dispatch(const DispatchMatchContext & context
     if (!dispatch_match.metadata.append_generated_resource(
             {
                 router_match.route_ids->id,
-                GeneratedResourceRole::QwenMoeExpertTable,
+                GeneratedResourceRole::MoeExpertTable,
                 expert_table_value,
                 expert_table_bytes,
                 routing_metadata,
@@ -510,13 +513,13 @@ static bool match_qwen_router_top8_dispatch(const DispatchMatchContext & context
         !dispatch_match.metadata.append_generated_resource(
             {
                 router_match.route_ids->id,
-                GeneratedResourceRole::QwenMoePartitionTable,
+                GeneratedResourceRole::MoePartitionTable,
                 partition_table_value,
                 partition_table_bytes,
                 routing_metadata,
             },
             metadata_status) ||
-        !dispatch_match.metadata.append_qwen_routing_bundle(
+        !dispatch_match.metadata.append_moe_routing_bundle(
             {
                 router_match.route_ids->id,
                 router_match.route_weights->id,
