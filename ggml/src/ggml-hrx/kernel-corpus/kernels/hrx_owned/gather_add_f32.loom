@@ -13,41 +13,39 @@ kernel.def target(@ggml_gather_add_gfx11_wave64) export("ggml_gather_add_f32") @
     %source_token_count: index, %output_token_count: index, %hidden_size: index) {
   %one = index.constant 1 : index
   %twofiftysix = index.constant 256 : index
-  %element_count = index.mul %output_token_count, %hidden_size : index
   %rounding = index.constant 255 : index
-  %rounded = index.add %element_count, %rounding : index
-  %workgroup_count = index.div %rounded, %twofiftysix : index
-  kernel.launch.config workgroups(%workgroup_count, %one, %one) workgroup_size(%twofiftysix, %one, %one) : index
+  %rounded_width = index.add %hidden_size, %rounding : index
+  %column_workgroup_count = index.div %rounded_width, %twofiftysix : index
+  kernel.launch.config workgroups(%column_workgroup_count, %output_token_count, %one) workgroup_size(%twofiftysix, %one, %one) : index
 } launch(%source_token_count: index, %output_token_count: index, %hidden_size: index,
          %attention: buffer, %residual: buffer, %output_ids: buffer, %output: buffer) {
   %source_count = index.assume %source_token_count [range(%source_token_count, 1, 2048)] : index
   %output_count = index.assume %output_token_count [range(%output_token_count, 1, 2048)] : index
   %width = index.assume %hidden_size [range(%hidden_size, 1, 65536)] : index
-  %total0 = index.mul %output_count, %width : index
-  %total = index.assume %total0 [range(%total0, 1, 134217728)] : index
-  %workgroup = kernel.workgroup.id<x> : index
+  %column_workgroup = kernel.workgroup.id<x> : index
+  %output_row0 = kernel.workgroup.id<y> : index
   %workitem = kernel.workitem.id<x> : index
   %twofiftysix = index.constant 256 : index
-  %base0 = index.mul %workgroup, %twofiftysix : index
-  %linear0 = index.add %base0, %workitem : index
-  %linear = index.assume %linear0 [range(%linear0, 0, 134217983)] : index
-  %in_bounds = index.cmp ult, %linear, %total : index
+  %output_row, %launch_output_count = index.assume %output_row0, %output_count [lt(%output_row0, %output_count)] : index, index
+  %base0 = index.mul %column_workgroup, %twofiftysix : index
+  %column0 = index.add %base0, %workitem : index
+  %column = index.assume %column0 [range(%column0, 0, 65535)] : index
+  %in_bounds = index.cmp ult, %column, %width : index
   %zero_offset = index.constant 0 : offset
   %attention_noalias, %residual_noalias, %ids_noalias, %output_noalias = buffer.assume.noalias %attention, %residual, %output_ids, %output : buffer, buffer, buffer, buffer
   %attention_view = buffer.view %attention_noalias[%zero_offset] : buffer -> view<[%source_count]x[%width]xf32>
   %residual_view = buffer.view %residual_noalias[%zero_offset] : buffer -> view<[%source_count]x[%width]xf32>
-  %ids_view = buffer.view %ids_noalias[%zero_offset] : buffer -> view<[%output_count]xi32>
-  %output_view = buffer.view %output_noalias[%zero_offset] : buffer -> view<[%output_count]x[%width]xf32>
+  %ids_view = buffer.view %ids_noalias[%zero_offset] : buffer -> view<[%launch_output_count]xi32>
+  %output_view = buffer.view %output_noalias[%zero_offset] : buffer -> view<[%launch_output_count]x[%width]xf32>
   scf.if %in_bounds {
-    %column = index.rem %linear, %width : index
-    %output_row = index.div %linear, %width : index
-    %source_row_i32 = view.load %ids_view[%output_row] : view<[%output_count]xi32> -> i32
+    %safe_column = index.assume %column [lt(%column, %width)] : index
+    %source_row_i32 = view.load %ids_view[%output_row] : view<[%launch_output_count]xi32> -> i32
     %source_row0 = index.cast %source_row_i32 : i32 to index
     %source_row = index.assume %source_row0 [range(%source_row0, 0, 2047), lt(%source_row0, %source_count)] : index
-    %attention_value = view.load %attention_view[%source_row, %column] : view<[%source_count]x[%width]xf32> -> f32
-    %residual_value = view.load %residual_view[%source_row, %column] : view<[%source_count]x[%width]xf32> -> f32
+    %attention_value = view.load %attention_view[%source_row, %safe_column] : view<[%source_count]x[%width]xf32> -> f32
+    %residual_value = view.load %residual_view[%source_row, %safe_column] : view<[%source_count]x[%width]xf32> -> f32
     %sum = scalar.addf %attention_value, %residual_value : f32
-    view.store %sum, %output_view[%output_row, %column] : f32, view<[%output_count]x[%width]xf32>
+    view.store %sum, %output_view[%output_row, %safe_column] : f32, view<[%launch_output_count]x[%width]xf32>
   }
   kernel.return
 }

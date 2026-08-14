@@ -267,6 +267,7 @@ int main() {
     static constexpr const char * kTarget = "gfx1100";
 
     const ggml::hrx::KernelDefinition & add             = find_kernel("ggml_add_f32");
+    const ggml::hrx::KernelDefinition & gather_add      = find_kernel("ggml_gather_add_f32");
     const ggml::hrx::KernelDefinition & rmsnorm         = find_kernel("qwen3_moe_rmsnorm_f32");
     const ggml::hrx::KernelDefinition & router_top8     = find_kernel("qwen3_moe_router_top8_f32");
     const ggml::hrx::KernelDefinition & expert_table    = find_kernel("qwen3_moe_build_expert_table");
@@ -295,7 +296,7 @@ int main() {
     REQUIRE(async_jit->async_enabled());
 
     std::vector<ggml::hrx::LoomCompiledKernelRef> refs;
-    refs.reserve(8);
+    refs.reserve(9);
     const auto enqueue_begin = std::chrono::steady_clock::now();
     refs.push_back(compile_kernel(*async_jit, "async-add-64", add,
                                   {
@@ -356,6 +357,13 @@ int main() {
                                       { "qwen3_moe.routed_gate_up.route_count", "8" },
                                       { "qwen3_moe.workload.token_capacity", "1" },
                                   }));
+    // Exercise gather-add coverage in the async JIT path.
+    refs.push_back(compile_kernel(*async_jit, "async-gather-add-2-to-1", gather_add,
+                                  {
+                                      { "source_token_count", 2    },
+                                      { "output_token_count", 1    },
+                                      { "hidden_size",         2048 },
+    }));
     const auto    enqueue_end = std::chrono::steady_clock::now();
     const int64_t enqueue_us  = elapsed_us(enqueue_begin, enqueue_end);
     std::printf("async Loom enqueue completed in %ld us\n", static_cast<long>(enqueue_us));

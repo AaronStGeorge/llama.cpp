@@ -3,9 +3,9 @@
   "upstream_repository": "https://github.com/rocm/hrx",
   "upstream_revision": "d343e4ad5167dca6758cb0d2db08785e43e99070",
   "source_subdirectory": "experimental/qwen_moe/kernels",
-  "corpus_sha256": "76dbbe967daae9e727d046efea12dcb220016769a051b55e6ebc9aad0e43c3c0",
+  "corpus_sha256": "7931df8af8a0f4fceabf527fb25c4e606611b95d4f080d0fe5df0cdc31b7e281",
   "upstream_corpus_sha256": "a314bf4cfcc637a8271b1e682f5b44b884c9180dcc30f22722b0cafc567be0d8",
-  "owned_corpus_sha256": "d297105d000708e8ada1e46f4afbdbd889f4031a32f0fed5a1908b67aa66a48f",
+  "owned_corpus_sha256": "bf129cc583efa377f3cf2d84178356486cb9e7a88f3e1816695fc1fe8d4e20cb",
   "build_bazel_sha256": "598eeb34f8606182a732299c989387dd450c0d8f33e4275635b4a679c0f986d0",
   "files": [
     {
@@ -173,8 +173,8 @@
     },
     {
       "path": "../hrx_owned/gather_add_f32.loom",
-      "sha256": "5ad9b09f3c0b76b4173b9c621baf2479308642c5a34dfe5c6d5abb3fe4bb3dc2",
-      "size": 4453,
+      "sha256": "c0f28e67b0f26d49664c1a307afb66367f3f05663e939953fba36885b7a2f6ac",
+      "size": 4497,
       "owner": "ggml-hrx"
     },
     {
