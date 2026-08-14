@@ -99,20 +99,6 @@ constexpr bool kernel_catalog_entry_exists(const char * family, const char * nam
     }}
     return false;
 }}
-
-constexpr bool kernel_catalog_ids_are_unique() {{
-    for (size_t i = 0; i < sizeof(kKernelCatalogEntries) / sizeof(kKernelCatalogEntries[0]); ++i) {{
-        for (size_t j = i + 1; j < sizeof(kKernelCatalogEntries) / sizeof(kKernelCatalogEntries[0]); ++j) {{
-            if (kernel_catalog_id(kKernelCatalogEntries[i].family, kKernelCatalogEntries[i].name) ==
-                kernel_catalog_id(kKernelCatalogEntries[j].family, kKernelCatalogEntries[j].name)) {{
-                return false;
-            }}
-        }}
-    }}
-    return true;
-}}
-
-static_assert(kernel_catalog_ids_are_unique(), "kernel catalog ids must be unique");
 """
 
 
@@ -314,6 +300,19 @@ def sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def kernel_catalog_id(family: str, name: str) -> int:
+    hash_value = 1469598103934665603
+    for byte in family.encode("utf-8"):
+        hash_value ^= byte
+        hash_value = (hash_value * 1099511628211) & 0xFFFFFFFFFFFFFFFF
+    hash_value ^= 0
+    hash_value = (hash_value * 1099511628211) & 0xFFFFFFFFFFFFFFFF
+    for byte in name.encode("utf-8"):
+        hash_value ^= byte
+        hash_value = (hash_value * 1099511628211) & 0xFFFFFFFFFFFFFFFF
+    return hash_value
+
+
 def generate_corpus_records(manifest: dict, source_records: Dict[str, str]) -> Tuple[str, str, int]:
     digests = manifest_file_digests(manifest)
     arrays = []
@@ -380,6 +379,15 @@ def generate_catalog_verifier(manifest: dict) -> str:
         (export.get("family", DEFAULT_KERNEL_FAMILY), export["name"])
         for export in manifest.get("exports", [])
     ))
+    ids: Dict[int, Tuple[str, str]] = {}
+    for family, kernel_name in kernel_entries:
+        catalog_id = kernel_catalog_id(family, kernel_name)
+        if catalog_id in ids:
+            previous_family, previous_name = ids[catalog_id]
+            raise RuntimeError(
+                "kernel catalog id collision: "
+                f"{previous_family}/{previous_name} and {family}/{kernel_name}")
+        ids[catalog_id] = (family, kernel_name)
     return CATALOG_DATA_TEMPLATE.format(
         kernel_entries="\n".join(
             "    { " + cpp_string(family) + ", " + cpp_string(kernel_name) + " },"

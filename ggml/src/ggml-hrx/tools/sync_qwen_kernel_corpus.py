@@ -24,11 +24,15 @@ CORPUS_FILES = (
     "qwen3_moe/attention_prepare_quantized.loom",
     "qwen3_moe/attention_qkv_postprocess_fused.loom",
     "qwen3_moe/attention_qkv_quantized.loom",
+    "qwen3_moe/attention_qkv_same_format_prefill.loom",
+    "qwen3_moe/batched_decode_expert_dispatch.loom",
+    "qwen3_moe/batched_decode_gate_up_q4k.loom",
     "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
     "qwen3_moe/expert_table_partition_fused.loom",
     "qwen3_moe/flash_attention_decode_f32_f16_wmma.loom",
     "qwen3_moe/flash_attention_decode_q128_f32_f16_wmma.loom",
     "qwen3_moe/flash_attention_decode_split_f32_f16_wmma.loom",
+    "qwen3_moe/flash_attention_decode_split_next_q8_test.loom",
     "qwen3_moe/flash_attention_f32_f16_wmma.loom",
     "qwen3_moe/model_config.loom",
     "qwen3_moe/routed_down_q4k.loom",
@@ -36,6 +40,7 @@ CORPUS_FILES = (
     "qwen3_moe/routed_down_next_q8.loom",
     "qwen3_moe/routed_down_quantized_f16_wmma.loom",
     "qwen3_moe/routed_down_weighted_reduce_next_rmsnorm_f32.loom",
+    "qwen3_moe/routed_down_weighted_reduce_next_rmsnorm_q8_1_x4.loom",
     "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
     "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
     "qwen3_moe/router_projection_f32.loom",
@@ -52,12 +57,14 @@ OWNED_FILES = (
     "qwen_owned/attention_state_initialize.loom",
     "qwen_owned/attention_metadata_bringup_workaround.loom",
     "hrx_owned/gather_add_f32.loom",
+    "hrx_owned/add_f32.loom",
 )
 
 KERNEL_RE = re.compile(
     r"kernel\.def(?P<modifiers>(?:\s+(?:target\([^)]*\)|export\(\"[^\"]+\"\)))*)"
     r"\s+@(?P<symbol>[A-Za-z0-9_]+)"
-    r"\((?P<workload>.*?)\)\s*\{.*?\}\s*launch\((?P<launch>.*?)\)\s*\{",
+    r"\((?P<workload>.*?)\)\s*\{.*?\}\s*launch\((?P<launch>.*?)\)"
+    r"(?:\s+where\s+\[[^\]]*\])?\s*\{",
     re.DOTALL,
 )
 ARG_RE = re.compile(r"%(?P<name>[A-Za-z0-9_]+)\s*:\s*(?P<type>[A-Za-z0-9<>?]+)")

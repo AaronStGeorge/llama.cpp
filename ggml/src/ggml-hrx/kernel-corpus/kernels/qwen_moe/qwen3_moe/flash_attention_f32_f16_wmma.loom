@@ -22,29 +22,22 @@ config.decl @qwen3_moe.attention.query_head_count : %value: index where [range(%
 
 config.decl @qwen3_moe.attention.key_value_head_count : %value: index where [range(%value, 1, 64)]
 
-config.decl @qwen3_moe.workload.token_capacity : %value: index where [range(%value, 1, 2048)]
-
 // Bounds the context copied by the test-only row-extraction kernel below.
 config.decl @qwen3_moe.attention.test.context_capacity : %value: index where [range(%value, 1, 32768)]
 
 kernel.def target(@qwen3_moe_attention_gfx11_wave64) @qwen3_moe_flash_attention_f32_f16_wmma(%query_token_count: index, %key_value_token_count: index) {
   %query_head_count = config.get @qwen3_moe.attention.query_head_count : index
-  %token_capacity = config.get @qwen3_moe.workload.token_capacity : index
   %c1 = index.constant 1 : index
   %c15 = index.constant 15 : index
   %c16 = index.constant 16 : index
   %c256 = index.constant 256 : index
-  %padded_query_token_count = index.add %token_capacity, %c15 : index
+  %padded_query_token_count = index.add %query_token_count, %c15 : index
   %query_tile_count = index.div %padded_query_token_count, %c16 : index
   kernel.launch.config workgroups(%query_tile_count, %query_head_count, %c1) workgroup_size(%c256, %c1, %c1) : index
-} launch(%query_token_count: index, %key_value_token_count: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %output: buffer) {
-  %token_capacity = config.get @qwen3_moe.workload.token_capacity : index
-  %bounded_query_token_count = index.assume %query_token_count [range(%query_token_count, 1, 2048), le(%query_token_count, %token_capacity)] : index
+} launch(%query_token_count: index, %key_value_token_count: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %output: buffer) where [range(%query_token_count, 1, 2048)] {
   %bounded_key_value_token_count = index.assume %key_value_token_count [range(%key_value_token_count, 1, 32768)] : index
-  %query_head_count0 = config.get @qwen3_moe.attention.query_head_count : index
-  %key_value_head_count0 = config.get @qwen3_moe.attention.key_value_head_count : index
-  %query_head_count = index.assume %query_head_count0 [range(%query_head_count0, 1, 64)] : index
-  %key_value_head_count = index.assume %key_value_head_count0 [range(%key_value_head_count0, 1, 64)] : index
+  %query_head_count = config.get @qwen3_moe.attention.query_head_count : index
+  %key_value_head_count = config.get @qwen3_moe.attention.key_value_head_count : index
   %query_tile = kernel.workgroup.id<x> : index
   %query_head0 = kernel.workgroup.id<y> : index
   %query_head, %launch_query_head_count = index.assume %query_head0, %query_head_count [lt(%query_head0, %query_head_count)] : index, index
@@ -107,10 +100,10 @@ kernel.def target(@qwen3_moe_attention_gfx11_wave64) @qwen3_moe_flash_attention_
   %query_token1 = index.add %query_origin, %query_row1 : index
   %query_token2 = index.add %query_origin, %query_row2 : index
   %query_token3 = index.add %query_origin, %query_row3 : index
-  %query_valid0 = index.cmp ult, %query_token0, %bounded_query_token_count : index
-  %query_valid1 = index.cmp ult, %query_token1, %bounded_query_token_count : index
-  %query_valid2 = index.cmp ult, %query_token2, %bounded_query_token_count : index
-  %query_valid3 = index.cmp ult, %query_token3, %bounded_query_token_count : index
+  %query_valid0 = index.cmp ult, %query_token0, %query_token_count : index
+  %query_valid1 = index.cmp ult, %query_token1, %query_token_count : index
+  %query_valid2 = index.cmp ult, %query_token2, %query_token_count : index
+  %query_valid3 = index.cmp ult, %query_token3, %query_token_count : index
   %query_valid = vector.from_elements %query_valid0, %query_valid1, %query_valid2, %query_valid3 : vector<4xi1>
   %subgroup_product_channel = index.mul %subgroup, %c16 : index
   %lane_output_tile = index.div %lane, %c16 : index
@@ -125,21 +118,16 @@ kernel.def target(@qwen3_moe_attention_gfx11_wave64) @qwen3_moe_flash_attention_
   %query_transposed_layout = encoding.layout.strided [1, 136] : encoding<layout>
   %probability_transposed_layout = encoding.layout.strided [1, 24] : encoding<layout>
   %query_noalias, %key_noalias, %value_noalias, %mask_noalias, %output_noalias = buffer.assume.noalias %query, %key, %value, %mask, %output : buffer, buffer, buffer, buffer, buffer
-  %query_global = buffer.assume.memory_space<global> %query_noalias : buffer
-  %key_global = buffer.assume.memory_space<global> %key_noalias : buffer
-  %value_global = buffer.assume.memory_space<global> %value_noalias : buffer
-  %mask_global = buffer.assume.memory_space<global> %mask_noalias : buffer
-  %output_global = buffer.assume.memory_space<global> %output_noalias : buffer
-  %query_aligned = buffer.assume.alignment %query_global {minimum_alignment = 16} : buffer
-  %key_aligned = buffer.assume.alignment %key_global {minimum_alignment = 16} : buffer
-  %value_aligned = buffer.assume.alignment %value_global {minimum_alignment = 16} : buffer
-  %mask_aligned = buffer.assume.alignment %mask_global {minimum_alignment = 16} : buffer
-  %output_aligned = buffer.assume.alignment %output_global {minimum_alignment = 16} : buffer
-  %query_view = buffer.view %query_aligned[%c0_offset] : buffer -> view<[%bounded_query_token_count]x[%query_head_count]x128xf32>
+  %query_aligned = buffer.assume.alignment %query_noalias {minimum_alignment = 16} : buffer
+  %key_aligned = buffer.assume.alignment %key_noalias {minimum_alignment = 16} : buffer
+  %value_aligned = buffer.assume.alignment %value_noalias {minimum_alignment = 16} : buffer
+  %mask_aligned = buffer.assume.alignment %mask_noalias {minimum_alignment = 16} : buffer
+  %output_aligned = buffer.assume.alignment %output_noalias {minimum_alignment = 16} : buffer
+  %query_view = buffer.view %query_aligned[%c0_offset] : buffer -> view<[%query_token_count]x[%query_head_count]x128xf32>
   %key_view = buffer.view %key_aligned[%c0_offset] : buffer -> view<[%bounded_key_value_token_count]x[%key_value_width]xf16>
   %value_view = buffer.view %value_aligned[%c0_offset] : buffer -> view<[%bounded_key_value_token_count]x[%key_value_width]xf16>
-  %mask_view = buffer.view %mask_aligned[%c0_offset] : buffer -> view<[%bounded_query_token_count]x[%bounded_key_value_token_count]xf16>
-  %output_view = buffer.view %output_aligned[%c0_offset] : buffer -> view<[%bounded_query_token_count]x[%query_head_count]x128xf32>
+  %mask_view = buffer.view %mask_aligned[%c0_offset] : buffer -> view<[%query_token_count]x[%bounded_key_value_token_count]xf16>
+  %output_view = buffer.view %output_aligned[%c0_offset] : buffer -> view<[%query_token_count]x[%query_head_count]x128xf32>
   %query_stage = buffer.alloca<workgroup> align(16) %query_stage_bytes : buffer
   %score_stage = buffer.alloca<workgroup> align(16) %score_stage_bytes : buffer
   %probability_stage = buffer.alloca<workgroup> align(16) %probability_stage_bytes : buffer
@@ -160,9 +148,9 @@ kernel.def target(@qwen3_moe_attention_gfx11_wave64) @qwen3_moe_flash_attention_
     %local_query_row = index.div %linear, %c128 : index
     %query_channel = index.rem %linear, %c128 : index
     %query_token = index.add %query_origin, %local_query_row : index
-    %query_valid_load = index.cmp ult, %query_token, %bounded_query_token_count : index
+    %query_valid_load = index.cmp ult, %query_token, %query_token_count : index
     %query_value = scf.if %query_valid_load -> (f16) {
-      %loaded = view.load %query_view[%query_token, %query_head, %query_channel] : view<[%bounded_query_token_count]x[%query_head_count]x128xf32> -> f32
+      %loaded = view.load %query_view[%query_token, %query_head, %query_channel] : view<[%query_token_count]x[%query_head_count]x128xf32> -> f32
       %scaled = scalar.mulf<reassoc|nnan|ninf|nsz|contract> %loaded, %attention_scale : f32
       %truncated = scalar.fptrunc %scaled : f32 to f16
       scf.yield %truncated : f16
@@ -180,25 +168,25 @@ kernel.def target(@qwen3_moe_attention_gfx11_wave64) @qwen3_moe_flash_attention_
     %key_token0 = index.add %key_origin, %lane : index
     %key_token = index.assume %key_token0 [lt(%key_token0, %bounded_key_value_token_count)] : index
     %mask0 = scf.if %query_valid0 -> (f16) {
-      %value = view.load %mask_view[%query_token0, %key_token] : view<[%bounded_query_token_count]x[%bounded_key_value_token_count]xf16> -> f16
+      %value = view.load %mask_view[%query_token0, %key_token] : view<[%query_token_count]x[%bounded_key_value_token_count]xf16> -> f16
       scf.yield %value : f16
     } else {
       scf.yield %c0_f16 : f16
     }
     %mask1 = scf.if %query_valid1 -> (f16) {
-      %value = view.load %mask_view[%query_token1, %key_token] : view<[%bounded_query_token_count]x[%bounded_key_value_token_count]xf16> -> f16
+      %value = view.load %mask_view[%query_token1, %key_token] : view<[%query_token_count]x[%bounded_key_value_token_count]xf16> -> f16
       scf.yield %value : f16
     } else {
       scf.yield %c0_f16 : f16
     }
     %mask2 = scf.if %query_valid2 -> (f16) {
-      %value = view.load %mask_view[%query_token2, %key_token] : view<[%bounded_query_token_count]x[%bounded_key_value_token_count]xf16> -> f16
+      %value = view.load %mask_view[%query_token2, %key_token] : view<[%query_token_count]x[%bounded_key_value_token_count]xf16> -> f16
       scf.yield %value : f16
     } else {
       scf.yield %c0_f16 : f16
     }
     %mask3 = scf.if %query_valid3 -> (f16) {
-      %value = view.load %mask_view[%query_token3, %key_token] : view<[%bounded_query_token_count]x[%bounded_key_value_token_count]xf16> -> f16
+      %value = view.load %mask_view[%query_token3, %key_token] : view<[%query_token_count]x[%bounded_key_value_token_count]xf16> -> f16
       scf.yield %value : f16
     } else {
       scf.yield %c0_f16 : f16
@@ -371,7 +359,7 @@ kernel.def target(@qwen3_moe_attention_gfx11_wave64) @qwen3_moe_flash_attention_
     %masked_score0 = scf.if %tail_valid0 -> (f32) {
       %tail_key_token = index.assume %tail_key_token0 [lt(%tail_key_token0, %bounded_key_value_token_count)] : index
       %raw_score = view.load %score_stage_view[%lane, %query_row0] : view<64x24xf32> -> f32
-      %mask_f16 = view.load %mask_view[%query_token0, %tail_key_token] : view<[%bounded_query_token_count]x[%bounded_key_value_token_count]xf16> -> f16
+      %mask_f16 = view.load %mask_view[%query_token0, %tail_key_token] : view<[%query_token_count]x[%bounded_key_value_token_count]xf16> -> f16
       %mask_f32 = scalar.extf %mask_f16 : f16 to f32
       %score = scalar.addf<reassoc|nnan|nsz> %raw_score, %mask_f32 : f32
       scf.yield %score : f32
@@ -381,7 +369,7 @@ kernel.def target(@qwen3_moe_attention_gfx11_wave64) @qwen3_moe_flash_attention_
     %masked_score1 = scf.if %tail_valid1 -> (f32) {
       %tail_key_token = index.assume %tail_key_token0 [lt(%tail_key_token0, %bounded_key_value_token_count)] : index
       %raw_score = view.load %score_stage_view[%lane, %query_row1] : view<64x24xf32> -> f32
-      %mask_f16 = view.load %mask_view[%query_token1, %tail_key_token] : view<[%bounded_query_token_count]x[%bounded_key_value_token_count]xf16> -> f16
+      %mask_f16 = view.load %mask_view[%query_token1, %tail_key_token] : view<[%query_token_count]x[%bounded_key_value_token_count]xf16> -> f16
       %mask_f32 = scalar.extf %mask_f16 : f16 to f32
       %score = scalar.addf<reassoc|nnan|nsz> %raw_score, %mask_f32 : f32
       scf.yield %score : f32
@@ -391,7 +379,7 @@ kernel.def target(@qwen3_moe_attention_gfx11_wave64) @qwen3_moe_flash_attention_
     %masked_score2 = scf.if %tail_valid2 -> (f32) {
       %tail_key_token = index.assume %tail_key_token0 [lt(%tail_key_token0, %bounded_key_value_token_count)] : index
       %raw_score = view.load %score_stage_view[%lane, %query_row2] : view<64x24xf32> -> f32
-      %mask_f16 = view.load %mask_view[%query_token2, %tail_key_token] : view<[%bounded_query_token_count]x[%bounded_key_value_token_count]xf16> -> f16
+      %mask_f16 = view.load %mask_view[%query_token2, %tail_key_token] : view<[%query_token_count]x[%bounded_key_value_token_count]xf16> -> f16
       %mask_f32 = scalar.extf %mask_f16 : f16 to f32
       %score = scalar.addf<reassoc|nnan|nsz> %raw_score, %mask_f32 : f32
       scf.yield %score : f32
@@ -401,7 +389,7 @@ kernel.def target(@qwen3_moe_attention_gfx11_wave64) @qwen3_moe_flash_attention_
     %masked_score3 = scf.if %tail_valid3 -> (f32) {
       %tail_key_token = index.assume %tail_key_token0 [lt(%tail_key_token0, %bounded_key_value_token_count)] : index
       %raw_score = view.load %score_stage_view[%lane, %query_row3] : view<64x24xf32> -> f32
-      %mask_f16 = view.load %mask_view[%query_token3, %tail_key_token] : view<[%bounded_query_token_count]x[%bounded_key_value_token_count]xf16> -> f16
+      %mask_f16 = view.load %mask_view[%query_token3, %tail_key_token] : view<[%query_token_count]x[%bounded_key_value_token_count]xf16> -> f16
       %mask_f32 = scalar.extf %mask_f16 : f16 to f32
       %score = scalar.addf<reassoc|nnan|nsz> %raw_score, %mask_f32 : f32
       scf.yield %score : f32
@@ -522,16 +510,16 @@ kernel.def target(@qwen3_moe_attention_gfx11_wave64) @qwen3_moe_flash_attention_
     %normalized2 = vector.extf %normalized2_f16 : vector<4xf16> to vector<4xf32>
     %normalized3 = vector.extf %normalized3_f16 : vector<4xf16> to vector<4xf32>
     scf.if %query_valid0 {
-      vector.store %normalized0, %output_view[%query_token0, %query_head, %lane_output_channel] : vector<4xf32>, view<[%bounded_query_token_count]x[%query_head_count]x128xf32>
+      vector.store %normalized0, %output_view[%query_token0, %query_head, %lane_output_channel] : vector<4xf32>, view<[%query_token_count]x[%query_head_count]x128xf32>
     }
     scf.if %query_valid1 {
-      vector.store %normalized1, %output_view[%query_token1, %query_head, %lane_output_channel] : vector<4xf32>, view<[%bounded_query_token_count]x[%query_head_count]x128xf32>
+      vector.store %normalized1, %output_view[%query_token1, %query_head, %lane_output_channel] : vector<4xf32>, view<[%query_token_count]x[%query_head_count]x128xf32>
     }
     scf.if %query_valid2 {
-      vector.store %normalized2, %output_view[%query_token2, %query_head, %lane_output_channel] : vector<4xf32>, view<[%bounded_query_token_count]x[%query_head_count]x128xf32>
+      vector.store %normalized2, %output_view[%query_token2, %query_head, %lane_output_channel] : vector<4xf32>, view<[%query_token_count]x[%query_head_count]x128xf32>
     }
     scf.if %query_valid3 {
-      vector.store %normalized3, %output_view[%query_token3, %query_head, %lane_output_channel] : vector<4xf32>, view<[%bounded_query_token_count]x[%query_head_count]x128xf32>
+      vector.store %normalized3, %output_view[%query_token3, %query_head, %lane_output_channel] : vector<4xf32>, view<[%query_token_count]x[%query_head_count]x128xf32>
     }
   }
   kernel.return
@@ -588,9 +576,8 @@ kernel.def target(@qwen3_moe_attention_gfx11_wave64) @qwen3_moe_flash_attention_
   %c0_offset = index.constant 0 : offset
   %c128 = index.constant 128 : index
   %c256 = index.constant 256 : index
-  %query_head_count0 = config.get @qwen3_moe.attention.query_head_count : index
+  %query_head_count = config.get @qwen3_moe.attention.query_head_count : index
   %context_capacity = config.get @qwen3_moe.attention.test.context_capacity : index
-  %query_head_count = index.assume %query_head_count0 [range(%query_head_count0, 1, 64)] : index
   %bounded_query_token_count = index.assume %query_token_count [range(%query_token_count, 1, 2048)] : index
   %bounded_context_count = index.assume %context_count [range(%context_count, 1, 32768), le(%context_count, %context_capacity)] : index
   %bounded_source_row, %source_query_token_count = index.assume %source_row, %bounded_query_token_count [range(%source_row, 0, 2047), lt(%source_row, %bounded_query_token_count)] : index, index
@@ -708,7 +695,7 @@ check.case public @qwen3_moe_flash_attention_f32_f16_wmma_multirow_differential_
   %actual1 = check.generate.fill value(-1.0) : tensor<1x32x128xf32>
   %actual2 = check.generate.fill value(-1.0) : tensor<1x32x128xf32>
   %actual3 = check.generate.fill value(-1.0) : tensor<1x32x128xf32>
-  kernel.launch @qwen3_moe_flash_attention_test_make_causal_mask[](%mask) : [](tensor<14x14xf16>)
+  kernel.launch @qwen3_moe_flash_attention_test_make_causal_mask(%mask) : (tensor<14x14xf16>)
   kernel.launch @qwen3_moe_flash_attention_f32_f16_wmma[%query_token_count, %key_value_token_count](%query_token_count, %key_value_token_count, %query, %key, %value, %mask, %actual) : [index, index](index, index, tensor<14x32x128xf32>, tensor<14x4x128xf16>, tensor<14x4x128xf16>, tensor<14x14xf16>, tensor<14x32x128xf32>)
   kernel.launch @qwen3_moe_flash_attention_test_extract_row[%query_token_count, %key_value_token_count, %row0](%query_token_count, %key_value_token_count, %row0, %query, %mask, %row_query, %row_mask) : [index, index, index](index, index, index, tensor<14x32x128xf32>, tensor<14x14xf16>, tensor<1x32x128xf32>, tensor<1x14xf16>)
   kernel.launch @qwen3_moe_flash_attention_f32_f16_wmma[%c1, %key_value_token_count](%c1, %key_value_token_count, %row_query, %key, %value, %row_mask, %expected0) : [index, index](index, index, tensor<1x32x128xf32>, tensor<14x4x128xf16>, tensor<14x4x128xf16>, tensor<1x14xf16>, tensor<1x32x128xf32>)

@@ -80,8 +80,8 @@ func.template<ggml.quantize_q8_1_x4.group_body> device @ggml_quantize_q8_1_x4_gr
   %c8 = index.constant 8 : index
   %c32 = index.constant 32 : index
   %c128 = index.constant 128 : index
-  %group_bytes = index.constant 144 : index
-  %payload_byte_add = index.constant 16 : index
+  %group_bytes = index.constant 144 : offset
+  %payload_byte_add = index.constant 16 : offset
   %scratch_d_byte_add = index.constant 128 : offset
   %scratch_bytes = index.constant 144 : offset
   %c0_f32 = scalar.constant 0.0 : f32
@@ -131,10 +131,8 @@ func.template<ggml.quantize_q8_1_x4.group_body> device @ggml_quantize_q8_1_x4_gr
   %rounded_values = vector.roundf %scaled_values : vector<4xf32>
   %quantized_values = vector.fptosi %rounded_values : vector<4xf32> to vector<4xi8>
   %packed_word = vector.bitcast %quantized_values : vector<4xi8> to vector<1xi32>
-  %group_byte_index = index.mul %group, %group_bytes : index
-  %group_byte_offset = index.cast %group_byte_index : index to offset
-  %payload_byte_index = index.add %group_byte_index, %payload_byte_add : index
-  %payload_byte_offset = index.cast %payload_byte_index : index to offset
+  %group_byte_offset = index.scale %group, %group_bytes : index, offset -> offset
+  %payload_byte_offset = index.add %group_byte_offset, %payload_byte_add : offset
   %group_ds = buffer.view %output_noalias[%group_byte_offset] : buffer -> view<8xf16>
   %group_qs = buffer.view %output_noalias[%payload_byte_offset] : buffer -> view<32xi32>
   %packed_word_index0 = index.add %block_word_add, %word_in_block : index
@@ -240,9 +238,9 @@ check.case public @ggml_quantize_q8_1_x4_f32_nonzero_case {
   %expected_positive_s = check.generate.fill value(32.0) : tensor<4xf32>
   %expected_negative_s = check.generate.fill value(-32.0) : tensor<4xf32>
   kernel.launch @ggml_quantize_q8_1_x4_f32[%token_count, %input_size](%token_count, %input_size, %positive_input, %positive_packed) : [index, index](index, index, tensor<128xf32>, tensor<144xi8>)
-  kernel.launch @ggml_q8_1_x4_inspect_one_group[](%positive_packed, %positive_words, %positive_d, %positive_s) : [](tensor<144xi8>, tensor<32xi32>, tensor<4xf32>, tensor<4xf32>)
+  kernel.launch @ggml_q8_1_x4_inspect_one_group(%positive_packed, %positive_words, %positive_d, %positive_s) : (tensor<144xi8>, tensor<32xi32>, tensor<4xf32>, tensor<4xf32>)
   kernel.launch @ggml_quantize_q8_1_x4_f32[%token_count, %input_size](%token_count, %input_size, %negative_input, %negative_packed) : [index, index](index, index, tensor<128xf32>, tensor<144xi8>)
-  kernel.launch @ggml_q8_1_x4_inspect_one_group[](%negative_packed, %negative_words, %negative_d, %negative_s) : [](tensor<144xi8>, tensor<32xi32>, tensor<4xf32>, tensor<4xf32>)
+  kernel.launch @ggml_q8_1_x4_inspect_one_group(%negative_packed, %negative_words, %negative_d, %negative_s) : (tensor<144xi8>, tensor<32xi32>, tensor<4xf32>, tensor<4xf32>)
   check.expect.equal actual(%positive_words) expected(%expected_positive_words) : tensor<32xi32>
   check.expect.equal actual(%negative_words) expected(%expected_negative_words) : tensor<32xi32>
   check.expect.close actual(%positive_d) expected(%expected_d) atol(0.0) rtol(0.0) nan(same) : tensor<4xf32>

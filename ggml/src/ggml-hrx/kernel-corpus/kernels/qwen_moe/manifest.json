@@ -1,77 +1,97 @@
 {
   "schema": "ggml-hrx-qwen-kernel-corpus-v2",
-  "upstream_repository": "https://github.com/ROCm/hrx-system.git",
-  "upstream_revision": "c09218e7ca354654b6c66dddaf80f6294e4748bb",
+  "upstream_repository": "https://github.com/rocm/hrx",
+  "upstream_revision": "d343e4ad5167dca6758cb0d2db08785e43e99070",
   "source_subdirectory": "experimental/qwen_moe/kernels",
-  "corpus_sha256": "f1c0d01385e69a78909d60335e469ea2a18620d9a81f0718ffd46bbc5395fa2e",
-  "upstream_corpus_sha256": "b2cfecf34b00686f11aba95b3ba41016ce7f35706184abd00191943e88afec4c",
-  "owned_corpus_sha256": "86537efcbd1b99c03a0921eda40c7bea7b3e463e50568ebc84c019c604114206",
+  "corpus_sha256": "76dbbe967daae9e727d046efea12dcb220016769a051b55e6ebc9aad0e43c3c0",
+  "upstream_corpus_sha256": "a314bf4cfcc637a8271b1e682f5b44b884c9180dcc30f22722b0cafc567be0d8",
+  "owned_corpus_sha256": "d297105d000708e8ada1e46f4afbdbd889f4031a32f0fed5a1908b67aa66a48f",
   "build_bazel_sha256": "598eeb34f8606182a732299c989387dd450c0d8f33e4275635b4a679c0f986d0",
   "files": [
     {
       "path": "ggml/linear_q6k_f32.loom",
-      "sha256": "3409ec9fe4a1af7c8e26b263127056a1ad7bd303233ab51ff344a2c0931e013e",
-      "size": 28551
+      "sha256": "f20c9cd0ce58c6158b8b45bf6c9502dc22d20d2a67eee975d96e7625f87ef615",
+      "size": 28513
     },
     {
       "path": "ggml/linear_q6k_q8_1_x4.loom",
-      "sha256": "31ab4a35f2afe350fb6ac37512d5bf708c91bb2425435a68b4d4d9f54d1c6e83",
-      "size": 32697
+      "sha256": "865795fdd3111e1e29bfe07325a3057c55656773109caec1224ac42e03d86bba",
+      "size": 32592
     },
     {
       "path": "ggml/quantize_q8_1_x4.loom",
-      "sha256": "c25f611d58946333c8bcac1de43851398ea3eab0a6fca1ad58078234dc5f3652",
-      "size": 16837
+      "sha256": "a9e6e995dd541142574058d4412f313beb87b6c6f4bb750b23a0a3047c951183",
+      "size": 16711
     },
     {
       "path": "qwen3_moe/attention_postprocess_f32_f16.loom",
-      "sha256": "59566eb968257f7bb3e1d9e4060a1702eccdb32beaaff30b50781778768d5f74",
-      "size": 26305
+      "sha256": "9125cd1ef87cb0d0ca8f4f6fc0c0a5bec29f9d6b30894287b53ad2d98c9433fb",
+      "size": 25955
     },
     {
       "path": "qwen3_moe/attention_prepare_quantized.loom",
-      "sha256": "75e2b00eb4574e206c7b5ead27f05f84ae3df9dea5b16c2bfdca72161fff7618",
-      "size": 30029
+      "sha256": "4bd47e89d1569e3622de60d88a6e09309afe35d48d3b6b1f25469e3b71aa7118",
+      "size": 29030
     },
     {
       "path": "qwen3_moe/attention_qkv_postprocess_fused.loom",
-      "sha256": "b37baed530c288b7de0d66dbbb6308dfe027b78020a2caa4d97762f4c82f218e",
-      "size": 20016
+      "sha256": "409f9f95ad8b0a58691cc74d665489d3d65ae37c73fb682b405ebff0bf1c0c79",
+      "size": 24797
     },
     {
       "path": "qwen3_moe/attention_qkv_quantized.loom",
-      "sha256": "c2ea4af7f34ceba7e0cc46044f244f7e3567eef5cffd1aa1035afa7c00941df2",
-      "size": 26145
+      "sha256": "7b631b54e042ead32c52b8ddacba4fd58de588571b586a05719f0ddcee080cc1",
+      "size": 25990
+    },
+    {
+      "path": "qwen3_moe/attention_qkv_same_format_prefill.loom",
+      "sha256": "55aeb3857c0646e9a1f05570ae6860fe42b0cfa91198868fc46bbed19f1c02fb",
+      "size": 12730
+    },
+    {
+      "path": "qwen3_moe/batched_decode_expert_dispatch.loom",
+      "sha256": "d97e2590dff046b79248b4a4b64828a5d2a328488ef42d4db7f489f0b2fdc8e6",
+      "size": 43960
+    },
+    {
+      "path": "qwen3_moe/batched_decode_gate_up_q4k.loom",
+      "sha256": "292074ba00372ee7fe409047e54c7d98b6a5bb2436e2245d993f50d124a55307",
+      "size": 27198
     },
     {
       "path": "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
-      "sha256": "912ab73dd3dbaf2fcbaf8a48cf119e234ae7987674a993b689365575edf155e1",
-      "size": 65359
+      "sha256": "331fbf77a24fd22424d75e7d7716cc78af8f43899bfe15b2ee947aa9c68f0bd8",
+      "size": 68289
     },
     {
       "path": "qwen3_moe/expert_table_partition_fused.loom",
-      "sha256": "8872dccf8eee8eae75461b491fcab8b676c52d5fd47fa848bdd3455af31ce62f",
-      "size": 20277
+      "sha256": "829eb55d5aff318c6872f0270fbad767748965a9943a229f6b17657b2a9b972d",
+      "size": 17122
     },
     {
       "path": "qwen3_moe/flash_attention_decode_f32_f16_wmma.loom",
-      "sha256": "f6472f37507ad89869970d2fe25d136dc1d4e15ced206f689b304a96e4a550c5",
-      "size": 56404
+      "sha256": "e02cb287df33b22d103117ce099310d9650061215b7df86f10b3ec3df5bf5e42",
+      "size": 55705
     },
     {
       "path": "qwen3_moe/flash_attention_decode_q128_f32_f16_wmma.loom",
-      "sha256": "89b3346905f804778216b2fb33ed694d2ded44b1e51c10fe7d52b2c18a5dddc4",
-      "size": 19944
+      "sha256": "4a44c7d01dd37802656e250cae410593cc4cfb87e2d05ff6152bb10847e29903",
+      "size": 19360
     },
     {
       "path": "qwen3_moe/flash_attention_decode_split_f32_f16_wmma.loom",
-      "sha256": "4cba7d86c294e2933c1a2b648b5dac8163a719733bad61215ccbf4b7d5467c70",
-      "size": 97864
+      "sha256": "466b17c488f5c0889aa55c208894a67eb6db0e1d91ba0e08a5b3e8fb4c82a94f",
+      "size": 94449
+    },
+    {
+      "path": "qwen3_moe/flash_attention_decode_split_next_q8_test.loom",
+      "sha256": "8bf53905b313dbe8ee6007e7dc7deac64d3b7412bf36180cb19c3c66d8a3255b",
+      "size": 9162
     },
     {
       "path": "qwen3_moe/flash_attention_f32_f16_wmma.loom",
-      "sha256": "5446a5b33095b46bf505f14f40c41d1335914fbcffd37e1825fa1b571143cd31",
-      "size": 72577
+      "sha256": "f5a745cee4cdc8d8287ce42398050a501f9f8b0c984654c4e53a8e89eba8c4c8",
+      "size": 71377
     },
     {
       "path": "qwen3_moe/model_config.loom",
@@ -85,48 +105,53 @@
     },
     {
       "path": "qwen3_moe/routed_down_q6k.loom",
-      "sha256": "713bdbc6461d01fb541f77cd9f54778ab52ef041f4358f8350513ac7eece91e0",
-      "size": 64656
+      "sha256": "fd8bc76bafd174fd57e298849f65c2876186b1c6aeaa90e3b419f26b2a5d0326",
+      "size": 64580
     },
     {
       "path": "qwen3_moe/routed_down_next_q8.loom",
-      "sha256": "77ab480dfbe8b8a65ce4f5a43d98d41a25f909ed50db88d976f83098f7090893",
-      "size": 4341
+      "sha256": "3eccaa3290b83967a44958064bbc11960f9db77e68436178c2c5a50052014e2b",
+      "size": 4239
     },
     {
       "path": "qwen3_moe/routed_down_quantized_f16_wmma.loom",
-      "sha256": "f5541dd5b06689628d59ecaa12c4da7f4eaf993b1f4f920949f884226a3b048b",
-      "size": 76274
+      "sha256": "b97a8e15a581acbc9b1de5776c7ef2ac727e8c138686ed496e2913814d2fd343",
+      "size": 75125
     },
     {
       "path": "qwen3_moe/routed_down_weighted_reduce_next_rmsnorm_f32.loom",
-      "sha256": "f2e4d617b7dd76254094072726238a27fdbc2d86bed09314e363e578cd6e89c2",
-      "size": 12291
+      "sha256": "351f7bcf6230058df9b78f59abb7011cf5690eedf5862ec0b75b537bf27e0e52",
+      "size": 11933
+    },
+    {
+      "path": "qwen3_moe/routed_down_weighted_reduce_next_rmsnorm_q8_1_x4.loom",
+      "sha256": "1ce06fd438cdebd63805b06066445cee717800ad1228ccfdc8294e8faccd6d95",
+      "size": 19387
     },
     {
       "path": "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-      "sha256": "cf958a5a0c39d70867465ab372fd96e801aaf0e6b1d17cf03478fc03b3168d2e",
-      "size": 126528
+      "sha256": "e5d5ed276070ae25e8f1d915e927716da519314d34319db4b722d30589233deb",
+      "size": 125922
     },
     {
       "path": "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
-      "sha256": "503e26521badc776a0cec6631724d68279bdf50a9757848183175cf2c35a6245",
-      "size": 74327
+      "sha256": "77f024758c30fd5c834f1429049021af3616a7162486115a41735aa81bf4d613",
+      "size": 73406
     },
     {
       "path": "qwen3_moe/router_projection_f32.loom",
-      "sha256": "e8d43312fd993959e1ed2be9a969abb5738a8ae3144705084f967679c0167a28",
-      "size": 19547
+      "sha256": "6c3eaf6834af0a58ecbd91702e009d410c4e7d52eac106a98a0f634f1d452ed5",
+      "size": 18655
     },
     {
       "path": "qwen3_moe/router_projection_top8_fused_f32.loom",
-      "sha256": "021092164c0a1d5c870442996d118c43d7b21050a2774c6732f17e326d088b9c",
-      "size": 17550
+      "sha256": "193615e54d175a8d2231bfda1f2c7672e338c1e0c4eef01cf0a5c3e35b26daa4",
+      "size": 17578
     },
     {
       "path": "qwen3_moe/router_top8_f32.loom",
-      "sha256": "24b57178697427a4aa85899aff338beb36d1f05336de784bb8c688b8804981ec",
-      "size": 15226
+      "sha256": "84738d2baee5b1a54dff2939a933024222fe8dee76ea30d71af1921b23a9e665",
+      "size": 14431
     },
     {
       "path": "../qwen_owned/token_embedding_bringup_workaround.loom",
@@ -553,6 +578,59 @@
       "compile_dependencies": []
     },
     {
+      "name": "qwen3_moe_attention_key_q4_aggregate_prefill_512",
+      "symbol": "qwen3_moe_attention_key_q4_aggregate_prefill_512",
+      "source": "qwen3_moe/attention_qkv_same_format_prefill.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "combined_weight",
+        "combined_output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "attention_qkv_same_format_prefill_linked",
+        "primary_sources": [
+          "qwen3_moe/attention_qkv_same_format_prefill.loom"
+        ],
+        "library_sources": [
+          "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
+          "ggml/linear_q6k_q8_1_x4.loom",
+          "qwen3_moe/attention_prepare_quantized.loom",
+          "qwen3_moe/model_config.loom",
+          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+          "ggml/quantize_q8_1_x4.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
+        "ggml/linear_q6k_q8_1_x4.loom",
+        "qwen3_moe/attention_prepare_quantized.loom",
+        "qwen3_moe/model_config.loom",
+        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+        "ggml/quantize_q8_1_x4.loom"
+      ]
+    },
+    {
       "name": "qwen3_moe_attention_postprocess_f32_f16",
       "symbol": "qwen3_moe_attention_postprocess_f32_f16",
       "source": "qwen3_moe/attention_postprocess_f32_f16.loom",
@@ -713,6 +791,245 @@
       ]
     },
     {
+      "name": "qwen3_moe_attention_qkv_postprocess_fused_decode_q4",
+      "symbol": "qwen3_moe_attention_qkv_postprocess_fused_decode_q4",
+      "source": "qwen3_moe/attention_qkv_postprocess_fused.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "cache_row_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "cache_row_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "q8_input",
+        "query_weight",
+        "key_weight",
+        "value_weight",
+        "positions",
+        "key_cache_indices",
+        "value_cache_indices",
+        "query_output_raw",
+        "key_output_raw",
+        "value_output_raw",
+        "query_norm_weight",
+        "key_norm_weight",
+        "inverse_frequencies",
+        "query_output",
+        "key_cache",
+        "value_cache",
+        "completion_counters"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read_write",
+        "read_write",
+        "read_write",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "attention_qkv_postprocess_fused_linked",
+        "primary_sources": [
+          "qwen3_moe/attention_qkv_postprocess_fused.loom"
+        ],
+        "library_sources": [
+          "qwen3_moe/attention_postprocess_f32_f16.loom",
+          "qwen3_moe/model_config.loom",
+          "qwen3_moe/attention_qkv_quantized.loom",
+          "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
+          "ggml/linear_q6k_q8_1_x4.loom",
+          "qwen3_moe/attention_prepare_quantized.loom",
+          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+          "ggml/quantize_q8_1_x4.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "qwen3_moe/attention_postprocess_f32_f16.loom",
+        "qwen3_moe/model_config.loom",
+        "qwen3_moe/attention_qkv_quantized.loom",
+        "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
+        "ggml/linear_q6k_q8_1_x4.loom",
+        "qwen3_moe/attention_prepare_quantized.loom",
+        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+        "ggml/quantize_q8_1_x4.loom"
+      ]
+    },
+    {
+      "name": "qwen3_moe_attention_qkv_postprocess_fused_decode_q6",
+      "symbol": "qwen3_moe_attention_qkv_postprocess_fused_decode_q6",
+      "source": "qwen3_moe/attention_qkv_postprocess_fused.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "cache_row_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "cache_row_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "q8_input",
+        "query_weight",
+        "key_weight",
+        "value_weight",
+        "positions",
+        "key_cache_indices",
+        "value_cache_indices",
+        "query_output_raw",
+        "key_output_raw",
+        "value_output_raw",
+        "query_norm_weight",
+        "key_norm_weight",
+        "inverse_frequencies",
+        "query_output",
+        "key_cache",
+        "value_cache",
+        "completion_counters"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read_write",
+        "read_write",
+        "read_write",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "attention_qkv_postprocess_fused_linked",
+        "primary_sources": [
+          "qwen3_moe/attention_qkv_postprocess_fused.loom"
+        ],
+        "library_sources": [
+          "qwen3_moe/attention_postprocess_f32_f16.loom",
+          "qwen3_moe/model_config.loom",
+          "qwen3_moe/attention_qkv_quantized.loom",
+          "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
+          "ggml/linear_q6k_q8_1_x4.loom",
+          "qwen3_moe/attention_prepare_quantized.loom",
+          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+          "ggml/quantize_q8_1_x4.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "qwen3_moe/attention_postprocess_f32_f16.loom",
+        "qwen3_moe/model_config.loom",
+        "qwen3_moe/attention_qkv_quantized.loom",
+        "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
+        "ggml/linear_q6k_q8_1_x4.loom",
+        "qwen3_moe/attention_prepare_quantized.loom",
+        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+        "ggml/quantize_q8_1_x4.loom"
+      ]
+    },
+    {
+      "name": "qwen3_moe_attention_qkv_q4_prefill_512",
+      "symbol": "qwen3_moe_attention_qkv_q4_prefill_512",
+      "source": "qwen3_moe/attention_qkv_same_format_prefill.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "combined_weight",
+        "combined_output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "attention_qkv_same_format_prefill_linked",
+        "primary_sources": [
+          "qwen3_moe/attention_qkv_same_format_prefill.loom"
+        ],
+        "library_sources": [
+          "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
+          "ggml/linear_q6k_q8_1_x4.loom",
+          "qwen3_moe/attention_prepare_quantized.loom",
+          "qwen3_moe/model_config.loom",
+          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+          "ggml/quantize_q8_1_x4.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
+        "ggml/linear_q6k_q8_1_x4.loom",
+        "qwen3_moe/attention_prepare_quantized.loom",
+        "qwen3_moe/model_config.loom",
+        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+        "ggml/quantize_q8_1_x4.loom"
+      ]
+    },
+    {
       "name": "qwen3_moe_attention_qkv_quantized",
       "symbol": "qwen3_moe_attention_qkv_quantized",
       "source": "qwen3_moe/attention_qkv_quantized.loom",
@@ -752,6 +1069,59 @@
         "link_module": "attention_qkv_quantized_linked",
         "primary_sources": [
           "qwen3_moe/attention_qkv_quantized.loom"
+        ],
+        "library_sources": [
+          "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
+          "ggml/linear_q6k_q8_1_x4.loom",
+          "qwen3_moe/attention_prepare_quantized.loom",
+          "qwen3_moe/model_config.loom",
+          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+          "ggml/quantize_q8_1_x4.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
+        "ggml/linear_q6k_q8_1_x4.loom",
+        "qwen3_moe/attention_prepare_quantized.loom",
+        "qwen3_moe/model_config.loom",
+        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+        "ggml/quantize_q8_1_x4.loom"
+      ]
+    },
+    {
+      "name": "qwen3_moe_attention_query_q4_aggregate_prefill_512",
+      "symbol": "qwen3_moe_attention_query_q4_aggregate_prefill_512",
+      "source": "qwen3_moe/attention_qkv_same_format_prefill.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "combined_weight",
+        "combined_output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "attention_qkv_same_format_prefill_linked",
+        "primary_sources": [
+          "qwen3_moe/attention_qkv_same_format_prefill.loom"
         ],
         "library_sources": [
           "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
@@ -814,6 +1184,284 @@
       "compile_dependencies": [
         "qwen3_moe/model_config.loom",
         "ggml/quantize_q8_1_x4.loom"
+      ]
+    },
+    {
+      "name": "qwen3_moe_attention_value_q4_aggregate_prefill_512",
+      "symbol": "qwen3_moe_attention_value_q4_aggregate_prefill_512",
+      "source": "qwen3_moe/attention_qkv_same_format_prefill.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "combined_weight",
+        "combined_output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "attention_qkv_same_format_prefill_linked",
+        "primary_sources": [
+          "qwen3_moe/attention_qkv_same_format_prefill.loom"
+        ],
+        "library_sources": [
+          "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
+          "ggml/linear_q6k_q8_1_x4.loom",
+          "qwen3_moe/attention_prepare_quantized.loom",
+          "qwen3_moe/model_config.loom",
+          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+          "ggml/quantize_q8_1_x4.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
+        "ggml/linear_q6k_q8_1_x4.loom",
+        "qwen3_moe/attention_prepare_quantized.loom",
+        "qwen3_moe/model_config.loom",
+        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+        "ggml/quantize_q8_1_x4.loom"
+      ]
+    },
+    {
+      "name": "qwen3_moe_batched_decode_gate_up_q4k_rows2",
+      "symbol": "qwen3_moe_batched_decode_gate_up_q4k_rows2",
+      "source": "qwen3_moe/batched_decode_gate_up_q4k.loom",
+      "workload_parameters": [
+        {
+          "name": "descriptor_count",
+          "type": "index"
+        },
+        {
+          "name": "queue_ordinal",
+          "type": "index"
+        },
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "route_count",
+          "type": "index"
+        },
+        {
+          "name": "expert_count",
+          "type": "index"
+        },
+        {
+          "name": "output_size",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "descriptor_count",
+          "type": "index"
+        },
+        {
+          "name": "queue_ordinal",
+          "type": "index"
+        },
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "route_count",
+          "type": "index"
+        },
+        {
+          "name": "expert_count",
+          "type": "index"
+        },
+        {
+          "name": "output_size",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "queue_descriptors",
+        "assignment_ordinals",
+        "q8_input",
+        "gate_weight",
+        "up_weight",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "batched_decode_gate_up_q4k_linked",
+        "primary_sources": [
+          "qwen3_moe/batched_decode_gate_up_q4k.loom"
+        ],
+        "library_sources": [
+          "ggml/quantize_q8_1_x4.loom",
+          "qwen3_moe/batched_decode_expert_dispatch.loom",
+          "qwen3_moe/routed_gate_up_swiglu_q4k.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "ggml/quantize_q8_1_x4.loom",
+        "qwen3_moe/batched_decode_expert_dispatch.loom",
+        "qwen3_moe/routed_gate_up_swiglu_q4k.loom"
+      ]
+    },
+    {
+      "name": "qwen3_moe_build_batched_decode_expert_dispatch",
+      "symbol": "qwen3_moe_build_batched_decode_expert_dispatch",
+      "source": "qwen3_moe/batched_decode_expert_dispatch.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "route_count",
+          "type": "index"
+        },
+        {
+          "name": "route_stride",
+          "type": "index"
+        },
+        {
+          "name": "expert_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "route_count",
+          "type": "index"
+        },
+        {
+          "name": "route_stride",
+          "type": "index"
+        },
+        {
+          "name": "expert_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "route_ids",
+        "assignment_ordinals",
+        "queue_counts",
+        "queue_descriptors"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "batched_decode_expert_dispatch_linked",
+        "primary_sources": [
+          "qwen3_moe/batched_decode_expert_dispatch.loom"
+        ],
+        "library_sources": [
+          "qwen3_moe/model_config.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "qwen3_moe/model_config.loom"
+      ]
+    },
+    {
+      "name": "qwen3_moe_build_batched_decode_expert_dispatch_reference",
+      "symbol": "qwen3_moe_build_batched_decode_expert_dispatch_reference",
+      "source": "qwen3_moe/batched_decode_expert_dispatch.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "route_count",
+          "type": "index"
+        },
+        {
+          "name": "route_stride",
+          "type": "index"
+        },
+        {
+          "name": "expert_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "route_count",
+          "type": "index"
+        },
+        {
+          "name": "route_stride",
+          "type": "index"
+        },
+        {
+          "name": "expert_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "route_ids",
+        "assignment_ordinals",
+        "queue_counts",
+        "queue_descriptors"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "batched_decode_expert_dispatch_linked",
+        "primary_sources": [
+          "qwen3_moe/batched_decode_expert_dispatch.loom"
+        ],
+        "library_sources": [
+          "qwen3_moe/model_config.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "qwen3_moe/model_config.loom"
       ]
     },
     {
@@ -1055,6 +1703,81 @@
       ]
     },
     {
+      "name": "qwen3_moe_dense_linear_q4k_f16_wmma_parameterized",
+      "symbol": "qwen3_moe_dense_linear_q4k_f16_wmma_parameterized",
+      "source": "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "input_size",
+          "type": "index"
+        },
+        {
+          "name": "output_size",
+          "type": "index"
+        },
+        {
+          "name": "output_accumulation",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "input_size",
+          "type": "index"
+        },
+        {
+          "name": "output_size",
+          "type": "index"
+        },
+        {
+          "name": "output_accumulation",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "weight",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "dense_linear_quantized_f16_wmma_linked",
+        "primary_sources": [
+          "qwen3_moe/dense_linear_quantized_f16_wmma.loom"
+        ],
+        "library_sources": [
+          "ggml/linear_q6k_q8_1_x4.loom",
+          "qwen3_moe/attention_prepare_quantized.loom",
+          "qwen3_moe/model_config.loom",
+          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+          "ggml/quantize_q8_1_x4.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "ggml/linear_q6k_q8_1_x4.loom",
+        "qwen3_moe/attention_prepare_quantized.loom",
+        "qwen3_moe/model_config.loom",
+        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+        "ggml/quantize_q8_1_x4.loom"
+      ]
+    },
+    {
       "name": "qwen3_moe_dense_linear_q4k_q8_1_x4",
       "symbol": "qwen3_moe_dense_linear_q4k_q8_1_x4",
       "source": "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
@@ -1177,6 +1900,81 @@
       "launch_parameters": [
         {
           "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "weight",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "dense_linear_quantized_f16_wmma_linked",
+        "primary_sources": [
+          "qwen3_moe/dense_linear_quantized_f16_wmma.loom"
+        ],
+        "library_sources": [
+          "ggml/linear_q6k_q8_1_x4.loom",
+          "qwen3_moe/attention_prepare_quantized.loom",
+          "qwen3_moe/model_config.loom",
+          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+          "ggml/quantize_q8_1_x4.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "ggml/linear_q6k_q8_1_x4.loom",
+        "qwen3_moe/attention_prepare_quantized.loom",
+        "qwen3_moe/model_config.loom",
+        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+        "ggml/quantize_q8_1_x4.loom"
+      ]
+    },
+    {
+      "name": "qwen3_moe_dense_linear_q6k_f16_wmma_parameterized",
+      "symbol": "qwen3_moe_dense_linear_q6k_f16_wmma_parameterized",
+      "source": "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "input_size",
+          "type": "index"
+        },
+        {
+          "name": "output_size",
+          "type": "index"
+        },
+        {
+          "name": "output_accumulation",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "input_size",
+          "type": "index"
+        },
+        {
+          "name": "output_size",
+          "type": "index"
+        },
+        {
+          "name": "output_accumulation",
           "type": "index"
         }
       ],
@@ -1394,6 +2192,66 @@
       "compile_dependencies": []
     },
     {
+      "name": "qwen3_moe_flash_attention_decode_split_mask_513_of_576",
+      "symbol": "qwen3_moe_flash_attention_decode_split_mask_513_of_576",
+      "source": "qwen3_moe/flash_attention_decode_split_next_q8_test.loom",
+      "workload_parameters": [],
+      "launch_parameters": [],
+      "bindings": [
+        "mask"
+      ],
+      "binding_access": [
+        "read"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "flash_attention_decode_split_f32_f16_wmma_next_q8_linked",
+        "primary_sources": [
+          "qwen3_moe/flash_attention_decode_split_next_q8_test.loom"
+        ],
+        "library_sources": [
+          "qwen3_moe/flash_attention_decode_split_f32_f16_wmma.loom",
+          "ggml/quantize_q8_1_x4.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "qwen3_moe/flash_attention_decode_split_f32_f16_wmma.loom",
+        "ggml/quantize_q8_1_x4.loom"
+      ]
+    },
+    {
+      "name": "qwen3_moe_flash_attention_decode_split_pack_completed_q8_test",
+      "symbol": "qwen3_moe_flash_attention_decode_split_pack_completed_q8_test",
+      "source": "qwen3_moe/flash_attention_decode_split_next_q8_test.loom",
+      "workload_parameters": [],
+      "launch_parameters": [],
+      "bindings": [
+        "input",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "flash_attention_decode_split_f32_f16_wmma_next_q8_linked",
+        "primary_sources": [
+          "qwen3_moe/flash_attention_decode_split_next_q8_test.loom"
+        ],
+        "library_sources": [
+          "qwen3_moe/flash_attention_decode_split_f32_f16_wmma.loom",
+          "ggml/quantize_q8_1_x4.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "qwen3_moe/flash_attention_decode_split_f32_f16_wmma.loom",
+        "ggml/quantize_q8_1_x4.loom"
+      ]
+    },
+    {
       "name": "qwen3_moe_flash_attention_decode_split_produce_partials_f32_f16_wmma",
       "symbol": "qwen3_moe_flash_attention_decode_split_produce_partials_f32_f16_wmma",
       "source": "qwen3_moe/flash_attention_decode_split_f32_f16_wmma.loom",
@@ -1436,6 +2294,37 @@
         "library_sources": []
       },
       "compile_dependencies": []
+    },
+    {
+      "name": "qwen3_moe_flash_attention_decode_split_quantize_reference_4096",
+      "symbol": "qwen3_moe_flash_attention_decode_split_quantize_reference_4096",
+      "source": "qwen3_moe/flash_attention_decode_split_next_q8_test.loom",
+      "workload_parameters": [],
+      "launch_parameters": [],
+      "bindings": [
+        "input",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "flash_attention_decode_split_f32_f16_wmma_next_q8_linked",
+        "primary_sources": [
+          "qwen3_moe/flash_attention_decode_split_next_q8_test.loom"
+        ],
+        "library_sources": [
+          "qwen3_moe/flash_attention_decode_split_f32_f16_wmma.loom",
+          "ggml/quantize_q8_1_x4.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "qwen3_moe/flash_attention_decode_split_f32_f16_wmma.loom",
+        "ggml/quantize_q8_1_x4.loom"
+      ]
     },
     {
       "name": "qwen3_moe_flash_attention_decode_split_reduce_f32",
@@ -2551,6 +3440,69 @@
       ]
     },
     {
+      "name": "qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_q8_1_x4",
+      "symbol": "qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_q8_1_x4",
+      "source": "qwen3_moe/routed_down_weighted_reduce_next_rmsnorm_q8_1_x4.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "route_weights",
+        "routed_output",
+        "hidden_state",
+        "next_norm_weight",
+        "next_projection_input"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "read"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "routed_down_weighted_reduce_next_rmsnorm_q8_1_x4_linked",
+        "primary_sources": [
+          "qwen3_moe/routed_down_weighted_reduce_next_rmsnorm_q8_1_x4.loom"
+        ],
+        "library_sources": [
+          "qwen3_moe/routed_down_quantized_f16_wmma.loom",
+          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+          "qwen3_moe/routed_down_q4k.loom",
+          "qwen3_moe/routed_down_q6k.loom",
+          "qwen3_moe/routed_down_next_q8.loom",
+          "qwen3_moe/attention_prepare_quantized.loom",
+          "qwen3_moe/model_config.loom",
+          "ggml/linear_q6k_q8_1_x4.loom",
+          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+          "ggml/quantize_q8_1_x4.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "qwen3_moe/routed_down_quantized_f16_wmma.loom",
+        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+        "qwen3_moe/routed_down_q4k.loom",
+        "qwen3_moe/routed_down_q6k.loom",
+        "qwen3_moe/routed_down_next_q8.loom",
+        "qwen3_moe/attention_prepare_quantized.loom",
+        "qwen3_moe/model_config.loom",
+        "ggml/linear_q6k_q8_1_x4.loom",
+        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+        "ggml/quantize_q8_1_x4.loom"
+      ]
+    },
+    {
       "name": "qwen3_moe_routed_gate_up_swiglu_q4k_f16_wmma",
       "symbol": "qwen3_moe_routed_gate_up_swiglu_q4k_f16_wmma",
       "source": "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
@@ -3457,6 +4409,15 @@
       ]
     },
     {
+      "name": "attention_qkv_same_format_prefill_linked",
+      "srcs": [
+        "qwen3_moe/attention_qkv_same_format_prefill.loom"
+      ],
+      "libraries": [
+        ":dense_linear_quantized_f16_wmma_linked"
+      ]
+    },
+    {
       "name": "linear_q6k_q8_1_x4_linked",
       "srcs": [
         "ggml/linear_q6k_q8_1_x4.loom"
@@ -3510,6 +4471,24 @@
       ]
     },
     {
+      "name": "routed_down_weighted_reduce_next_rmsnorm_q8_1_x4_linked",
+      "srcs": [
+        "qwen3_moe/routed_down_weighted_reduce_next_rmsnorm_q8_1_x4.loom"
+      ],
+      "libraries": [
+        "qwen3_moe/routed_down_quantized_f16_wmma.loom",
+        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+        "qwen3_moe/routed_down_q4k.loom",
+        "qwen3_moe/routed_down_q6k.loom",
+        "qwen3_moe/routed_down_next_q8.loom",
+        "qwen3_moe/attention_prepare_quantized.loom",
+        "qwen3_moe/model_config.loom",
+        "ggml/linear_q6k_q8_1_x4.loom",
+        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+        "ggml/quantize_q8_1_x4.loom"
+      ]
+    },
+    {
       "name": "routed_down_q4k_linked",
       "srcs": [
         "qwen3_moe/routed_down_q4k.loom"
@@ -3546,6 +4525,26 @@
       ]
     },
     {
+      "name": "batched_decode_expert_dispatch_linked",
+      "srcs": [
+        "qwen3_moe/batched_decode_expert_dispatch.loom"
+      ],
+      "libraries": [
+        "qwen3_moe/model_config.loom"
+      ]
+    },
+    {
+      "name": "batched_decode_gate_up_q4k_linked",
+      "srcs": [
+        "qwen3_moe/batched_decode_gate_up_q4k.loom"
+      ],
+      "libraries": [
+        "ggml/quantize_q8_1_x4.loom",
+        "qwen3_moe/batched_decode_expert_dispatch.loom",
+        "qwen3_moe/routed_gate_up_swiglu_q4k.loom"
+      ]
+    },
+    {
       "name": "expert_table_partition_fused_linked",
       "srcs": [
         "qwen3_moe/expert_table_partition_fused.loom"
@@ -3576,6 +4575,16 @@
         "qwen3_moe/model_config.loom",
         "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
         "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+        "ggml/quantize_q8_1_x4.loom"
+      ]
+    },
+    {
+      "name": "flash_attention_decode_split_f32_f16_wmma_next_q8_linked",
+      "srcs": [
+        "qwen3_moe/flash_attention_decode_split_next_q8_test.loom"
+      ],
+      "libraries": [
+        "qwen3_moe/flash_attention_decode_split_f32_f16_wmma.loom",
         "ggml/quantize_q8_1_x4.loom"
       ]
     }
@@ -3690,6 +4699,21 @@
       "link_module": "attention_qkv_postprocess_fused_linked"
     },
     {
+      "name": "attention_qkv_same_format_prefill_plan_test",
+      "args": [
+        "$(location :attention_qkv_same_format_prefill_linked)",
+        "--benchmark=@qwen3_moe_attention_qkv_q4_prefill_512_fused",
+        "--config=qwen3_moe.attention.key_value_size=512",
+        "--config=qwen3_moe.attention.query_size=4096",
+        "--config=qwen3_moe.dense_quantized.output_accumulation=0",
+        "--config=qwen3_moe.model.hidden_size=2048",
+        "--config=qwen3_moe.workload.token_capacity=512",
+        "--dry-run",
+        "--output-format=jsonl"
+      ],
+      "link_module": "attention_qkv_same_format_prefill_linked"
+    },
+    {
       "name": "quantize_q8_1_x4_plan_test",
       "args": [
         "$(location ggml/quantize_q8_1_x4.loom)",
@@ -3753,6 +4777,21 @@
       "link_module": "routed_down_weighted_reduce_next_rmsnorm_f32_linked"
     },
     {
+      "name": "routed_down_weighted_reduce_next_rmsnorm_q8_1_x4_plan_test",
+      "args": [
+        "$(location :routed_down_weighted_reduce_next_rmsnorm_q8_1_x4_linked)",
+        "--benchmark=@qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_q8_1_x4_fused_prefill_14",
+        "--config=qwen3_moe.model.hidden_size=2048",
+        "--config=qwen3_moe.model.rms_epsilon=0.000001",
+        "--config=qwen3_moe.routed_down.output_size=2048",
+        "--config=qwen3_moe.routed_down.route_count=8",
+        "--config=qwen3_moe.workload.token_capacity=512",
+        "--dry-run",
+        "--output-format=jsonl"
+      ],
+      "link_module": "routed_down_weighted_reduce_next_rmsnorm_q8_1_x4_linked"
+    },
+    {
       "name": "routed_down_quantized_f16_wmma_plan_test",
       "args": [
         "$(location :routed_down_quantized_f16_wmma_linked)",
@@ -3795,6 +4834,59 @@
         "--output-format=jsonl"
       ],
       "link_module": "routed_down_q6k_linked"
+    },
+    {
+      "name": "batched_decode_gate_up_q4k_plan_test",
+      "args": [
+        "$(location :batched_decode_gate_up_q4k_linked)",
+        "--benchmark=@qwen3_moe_batched_decode_gate_up_q4k_rows2_benchmark",
+        "--config=qwen3_moe.batched_decode.rows2_descriptor_capacity=64",
+        "--config=qwen3_moe.batched_decode.schedule0_row_limit=1",
+        "--config=qwen3_moe.batched_decode.schedule1_row_limit=2",
+        "--config=qwen3_moe.batched_decode.schedule2_row_limit=4",
+        "--config=qwen3_moe.router.expert_count=128",
+        "--config=qwen3_moe.router.route_count=8",
+        "--config=qwen3_moe.routed_gate_up.expert_count=128",
+        "--config=qwen3_moe.routed_gate_up.input_size=2048",
+        "--config=qwen3_moe.routed_gate_up.output_size=768",
+        "--config=qwen3_moe.routed_gate_up.route_count=8",
+        "--config=qwen3_moe.workload.token_capacity=16",
+        "--dry-run",
+        "--output-format=jsonl"
+      ],
+      "link_module": "batched_decode_gate_up_q4k_linked"
+    },
+    {
+      "name": "batched_decode_expert_dispatch_plan_test",
+      "args": [
+        "$(location :batched_decode_expert_dispatch_linked)",
+        "--benchmark=@qwen3_moe_batched_decode_expert_dispatch_diverse",
+        "--config=qwen3_moe.batched_decode.schedule0_row_limit=1",
+        "--config=qwen3_moe.batched_decode.schedule1_row_limit=2",
+        "--config=qwen3_moe.batched_decode.schedule2_row_limit=4",
+        "--config=qwen3_moe.router.expert_count=128",
+        "--config=qwen3_moe.router.route_count=8",
+        "--config=qwen3_moe.workload.token_capacity=16",
+        "--dry-run",
+        "--output-format=jsonl"
+      ],
+      "link_module": "batched_decode_expert_dispatch_linked"
+    },
+    {
+      "name": "batched_decode_expert_dispatch_configurable_plan_test",
+      "args": [
+        "$(location :batched_decode_expert_dispatch_linked)",
+        "--benchmark=@qwen3_moe_batched_decode_expert_dispatch_configurable",
+        "--config=qwen3_moe.batched_decode.schedule0_row_limit=1",
+        "--config=qwen3_moe.batched_decode.schedule1_row_limit=3",
+        "--config=qwen3_moe.batched_decode.schedule2_row_limit=6",
+        "--config=qwen3_moe.router.expert_count=32",
+        "--config=qwen3_moe.router.route_count=4",
+        "--config=qwen3_moe.workload.token_capacity=8",
+        "--dry-run",
+        "--output-format=jsonl"
+      ],
+      "link_module": "batched_decode_expert_dispatch_linked"
     },
     {
       "name": "expert_table_partition_fused_plan_test",
