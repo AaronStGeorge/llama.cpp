@@ -2,6 +2,7 @@
 
 #include "dispatch-add.h"
 #include "dispatch-gather-add.h"
+#include "dispatch-llm-matmul.h"
 #include "dispatch-moe-router.h"
 #include "dispatch-qwen-attention-postprocess.h"
 #include "dispatch-qwen-flash-attention.h"
@@ -34,6 +35,7 @@ static void register_llm_dispatches(DispatchRegistryBuilder & builder) {
     register_qwen_attention_postprocess_dispatches(builder);
     register_qwen_flash_attention_dispatches(builder);
     register_qwen_matmul_dispatches(builder);
+    register_llm_matmul_dispatches(builder);
     register_routed_ffn_dispatches(builder);
     register_qwen_preamble_dispatches(builder);
     register_qwen_rmsnorm_dispatches(builder);

@@ -163,6 +163,8 @@ ggml_add_backend_library(ggml-hrx
     dispatch_registration/dispatch-add.h
     dispatch_registration/dispatch-gather-add.cpp
     dispatch_registration/dispatch-gather-add.h
+    dispatch_registration/dispatch-llm-matmul.cpp
+    dispatch_registration/dispatch-llm-matmul.h
     dispatch_registration/dispatch-llm-profiles.h
     dispatch_registration/dispatch-llm-shapes.h
     dispatch_registration/dispatch-qwen-attention-postprocess.cpp

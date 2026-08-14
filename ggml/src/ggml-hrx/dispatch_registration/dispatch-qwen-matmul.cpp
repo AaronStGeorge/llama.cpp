@@ -20,12 +20,9 @@ static constexpr KernelCatalogRef kQwenDenseLinearQ4KQ8NextQ8Kernel =
     GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_dense_linear_q4k_q8_1_x4_next_q8");
 static constexpr KernelCatalogRef kGgmlLinearQ6KQ8_1X4Kernel =
     GGML_HRX_KERNEL_REF("qwen3_moe", "ggml_linear_q6k_q8_1_x4");
-static constexpr KernelCatalogRef kQwenRouterProjectionF32FourRowWave32Kernel =
-    GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_router_projection_f32_four_row_wave32");
 
-static constexpr int64_t kQwenHiddenSize        = kQwen30BMoeDispatchProfile.hidden_size;
-static constexpr int64_t kQwenRouterExpertCount = kQwen30BMoeDispatchProfile.expert_count;
-static constexpr int64_t kQwenVocabularyCount   = 151936;
+static constexpr int64_t kQwenHiddenSize      = kQwen30BMoeDispatchProfile.hidden_size;
+static constexpr int64_t kQwenVocabularyCount = 151936;
 
 static const Value * graph_value(const Graph & graph, ValueId id) {
     return graph.values().find(id);
@@ -43,25 +40,8 @@ static bool is_supported_dense_output_size(int64_t output_size) {
     return output_size >= 1 && output_size <= 262144;
 }
 
-enum class QwenMatmulRoute {
-    DenseQ4K,
-    DenseQ6K,
-    RouterF32,
-};
-
 static bool is_qwen_endpoint_projection(int64_t input_size, int64_t output_size) {
     return input_size == kQwenHiddenSize && output_size == kQwenVocabularyCount;
-}
-
-static bool is_supported_dense_query_length(QwenMatmulRoute route,
-                                            int64_t         token_count,
-                                            int64_t         input_size,
-                                            int64_t         output_size) {
-    if (is_qwen_prefill_query_length(token_count)) {
-        return true;
-    }
-    return route == QwenMatmulRoute::DenseQ6K && is_qwen_decode_query_length(token_count) &&
-           is_qwen_endpoint_projection(input_size, output_size);
 }
 
 static std::string to_config_value(int64_t value) {
@@ -79,7 +59,6 @@ struct QwenMatmulMatch {
     int64_t          output_size = 0;
     int64_t          token_count = 0;
     bool             dense       = false;
-    bool             router      = false;
 
     bool matched() const {
         return input != nullptr && weight != nullptr && output != nullptr && kernel.id != kUncatalogedKernelId;
@@ -190,74 +169,6 @@ static const Value * get_rows_source_with_same_layout(const Graph & graph, const
     return source;
 }
 
-static QwenMatmulMatch match_qwen_matmul(const Graph & graph, const GraphNode * node, QwenMatmulRoute route) {
-    QwenMatmulMatch match;
-    if (node == nullptr || node->op != GGML_OP_MUL_MAT || node->inputs.size() != 2) {
-        return match;
-    }
-
-    const Value * weight = graph_value(graph, node->inputs[0]);
-    const Value * input  = graph_value(graph, node->inputs[1]);
-    const Value * output = graph_value(graph, node->output);
-    if (weight == nullptr || input == nullptr || output == nullptr) {
-        return {};
-    }
-    if (!is_2d(*weight) || !is_2d(*input) || !is_2d(*output)) {
-        return {};
-    }
-    if (!weight->contiguous || !input->contiguous || !output->contiguous) {
-        return {};
-    }
-    if (input->type != GGML_TYPE_F32 || output->type != GGML_TYPE_F32) {
-        return {};
-    }
-
-    const int64_t input_size  = weight->ne[0];
-    const int64_t output_size = weight->ne[1];
-    const int64_t token_count = input->ne[1];
-    if (input->ne[0] != input_size || output->ne[0] != output_size || output->ne[1] != token_count) {
-        return {};
-    }
-    if ((route == QwenMatmulRoute::DenseQ4K && weight->type == GGML_TYPE_Q4_K) ||
-        (route == QwenMatmulRoute::DenseQ6K && weight->type == GGML_TYPE_Q6_K)) {
-        if (!is_supported_dense_query_length(route, token_count, input_size, output_size)) {
-            return {};
-        }
-        if (!is_supported_dense_input_size(input_size) || !is_supported_dense_output_size(output_size)) {
-            return {};
-        }
-        match.input       = input;
-        match.weight      = weight;
-        match.output      = output;
-        match.input_value = input->id;
-        match.input_bytes = input->byte_count;
-        match.kernel =
-            weight->type == GGML_TYPE_Q4_K ? kQwenDenseLinearQ4KF16WmmaKernel : kQwenDenseLinearQ6KF16WmmaKernel;
-        match.input_size  = input_size;
-        match.output_size = output_size;
-        match.token_count = token_count;
-        match.dense       = true;
-        return match;
-    }
-
-    if (route == QwenMatmulRoute::RouterF32 && weight->type == GGML_TYPE_F32 && input_size == kQwenHiddenSize &&
-        output_size == kQwenRouterExpertCount && is_qwen_supported_query_length(token_count)) {
-        match.input       = input;
-        match.weight      = weight;
-        match.output      = output;
-        match.input_value = input->id;
-        match.input_bytes = input->byte_count;
-        match.kernel      = kQwenRouterProjectionF32FourRowWave32Kernel;
-        match.input_size  = input_size;
-        match.output_size = output_size;
-        match.token_count = token_count;
-        match.router      = true;
-        return match;
-    }
-
-    return {};
-}
-
 static QwenMatmulMatch match_qwen_q6k_q8_matmul(const Graph & graph, const GraphNode * node, const CommandPlan & plan) {
     QwenMatmulMatch match;
     if (node == nullptr || node->op != GGML_OP_MUL_MAT || node->inputs.size() != 2) {
@@ -308,6 +219,43 @@ static QwenMatmulMatch match_qwen_q6k_q8_matmul(const Graph & graph, const Graph
     match.input_size  = input_size;
     match.output_size = output_size;
     match.token_count = token_count;
+    return match;
+}
+
+static QwenMatmulMatch match_qwen_decode_endpoint_q6k_matmul(const Graph & graph, const GraphNode * node) {
+    QwenMatmulMatch match;
+    if (node == nullptr || node->op != GGML_OP_MUL_MAT || node->inputs.size() != 2) {
+        return match;
+    }
+
+    const Value * weight = graph_value(graph, node->inputs[0]);
+    const Value * input  = graph_value(graph, node->inputs[1]);
+    const Value * output = graph_value(graph, node->output);
+    if (weight == nullptr || input == nullptr || output == nullptr || !is_2d(*weight) || !is_2d(*input) ||
+        !is_2d(*output) || !weight->contiguous || !input->contiguous || !output->contiguous ||
+        weight->type != GGML_TYPE_Q6_K || input->type != GGML_TYPE_F32 || output->type != GGML_TYPE_F32) {
+        return {};
+    }
+
+    const int64_t input_size  = weight->ne[0];
+    const int64_t output_size = weight->ne[1];
+    const int64_t token_count = input->ne[1];
+    if (input->ne[0] != input_size || output->ne[0] != output_size || output->ne[1] != token_count ||
+        !is_qwen_decode_query_length(token_count) || !is_qwen_endpoint_projection(input_size, output_size) ||
+        !is_supported_dense_input_size(input_size) || !is_supported_dense_output_size(output_size)) {
+        return {};
+    }
+
+    match.input       = input;
+    match.weight      = weight;
+    match.output      = output;
+    match.input_value = input->id;
+    match.input_bytes = input->byte_count;
+    match.kernel      = kQwenDenseLinearQ6KF16WmmaKernel;
+    match.input_size  = input_size;
+    match.output_size = output_size;
+    match.token_count = token_count;
+    match.dense       = true;
     return match;
 }
 
@@ -515,9 +463,6 @@ static void build_qwen_matmul_dispatch(const QwenMatmulMatch & match,
         dispatch.kernel.compile_parameters.emplace("qwen3_moe.dense_quantized.output_size",
                                                    to_config_value(match.output_size));
         dispatch.kernel.compile_parameters.emplace("qwen3_moe.dense_quantized.output_accumulation", "0");
-    } else if (match.router) {
-        dispatch.kernel.compile_parameters.emplace("qwen3_moe.model.hidden_size", to_config_value(match.input_size));
-        dispatch.kernel.compile_parameters.emplace("qwen3_moe.router.expert_count", to_config_value(match.output_size));
     }
     dispatch.bindings.push_back({ match.input_value, 0, match.input_bytes });
     dispatch.bindings.push_back({ match.weight->id, 0, match.weight->byte_count });
@@ -527,35 +472,18 @@ static void build_qwen_matmul_dispatch(const QwenMatmulMatch & match,
     dispatch_match.dispatches.push_back(std::move(dispatch));
 }
 
-static bool match_qwen_dense_q4k_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
-    const QwenMatmulMatch match = match_qwen_matmul(context.graph, context.root_node, QwenMatmulRoute::DenseQ4K);
-    if (!match.matched()) {
-        return false;
-    }
-    build_qwen_matmul_dispatch(match, dispatch_match, context.root_index);
-    return true;
-}
-
-static bool match_qwen_dense_q6k_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
-    const QwenMatmulMatch match = match_qwen_matmul(context.graph, context.root_node, QwenMatmulRoute::DenseQ6K);
-    if (!match.matched()) {
-        return false;
-    }
-    build_qwen_matmul_dispatch(match, dispatch_match, context.root_index);
-    return true;
-}
-
-static bool match_qwen_router_f32_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
-    const QwenMatmulMatch match = match_qwen_matmul(context.graph, context.root_node, QwenMatmulRoute::RouterF32);
-    if (!match.matched()) {
-        return false;
-    }
-    build_qwen_matmul_dispatch(match, dispatch_match, context.root_index);
-    return true;
-}
-
 static bool match_qwen_q6k_q8_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
     const QwenMatmulMatch match = match_qwen_q6k_q8_matmul(context.graph, context.root_node, context.plan);
+    if (!match.matched()) {
+        return false;
+    }
+    build_qwen_matmul_dispatch(match, dispatch_match, context.root_index);
+    return true;
+}
+
+static bool match_qwen_decode_endpoint_q6k_dispatch(const DispatchMatchContext & context,
+                                                    DispatchMatch &              dispatch_match) {
+    const QwenMatmulMatch match = match_qwen_decode_endpoint_q6k_matmul(context.graph, context.root_node);
     if (!match.matched()) {
         return false;
     }
@@ -687,28 +615,12 @@ void register_qwen_matmul_dispatches(DispatchRegistryBuilder & registry) {
         match_qwen_q6k_q8_dispatch,
     });
     registry.add({
-        "qwen.matmul.dense_q4k_f16_wmma",
+        "qwen.matmul.decode_endpoint_q6k_f16_wmma",
         GGML_OP_MUL_MAT,
         DispatchMatchKind::SingleOp,
         100,
         DispatchSource::Qwen,
-        match_qwen_dense_q4k_dispatch,
-    });
-    registry.add({
-        "qwen.matmul.dense_q6k_f16_wmma",
-        GGML_OP_MUL_MAT,
-        DispatchMatchKind::SingleOp,
-        100,
-        DispatchSource::Qwen,
-        match_qwen_dense_q6k_dispatch,
-    });
-    registry.add({
-        "qwen.matmul.router_projection_f32_four_row_wave32",
-        GGML_OP_MUL_MAT,
-        DispatchMatchKind::SingleOp,
-        90,
-        DispatchSource::Qwen,
-        match_qwen_router_f32_dispatch,
+        match_qwen_decode_endpoint_q6k_dispatch,
     });
 }
 

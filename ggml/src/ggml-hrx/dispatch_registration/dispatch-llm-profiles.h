@@ -14,15 +14,12 @@ struct LlmMoeDispatchProfile {
     float        rms_norm_epsilon   = 0.0f;
 };
 
-constexpr LlmMoeDispatchProfile kQwen30BMoeDispatchProfile = {
-    "qwen30b",
-    2048,
-    768,
-    128,
-    8,
-    2048,
-    0.000001f,
+constexpr LlmMoeDispatchProfile kLlmMoeQwen30BDispatchProfile = {
+    "qwen30b", 2048, 768, 128, 8, 2048, 0.000001f,
 };
+
+static constexpr const LlmMoeDispatchProfile & kActiveLlmMoeDispatchProfile = kLlmMoeQwen30BDispatchProfile;
+static constexpr const LlmMoeDispatchProfile & kQwen30BMoeDispatchProfile   = kLlmMoeQwen30BDispatchProfile;
 
 constexpr bool is_llm_supported_query_length(const LlmMoeDispatchProfile & profile, int64_t query_length) {
     return query_length >= 1 && query_length <= profile.max_token_count;

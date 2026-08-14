@@ -19,6 +19,8 @@ static constexpr KernelCatalogRef kQwenRouterTop8F32Kernel =
     GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_router_top8_f32");
 static constexpr KernelCatalogRef kQwenRouterProjectionTop8FusedDecodeF32Kernel =
     GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_router_projection_top8_fused_decode_f32");
+static constexpr KernelCatalogRef kQwenRouterProjectionF32FourRowWave32Kernel =
+    GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_router_projection_f32_four_row_wave32");
 static constexpr KernelCatalogRef kQwenBuildExpertTableKernel =
     GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_build_expert_table");
 static constexpr KernelCatalogRef kQwenBuildExpertPartitionTableKernel =
@@ -26,7 +28,7 @@ static constexpr KernelCatalogRef kQwenBuildExpertPartitionTableKernel =
 static constexpr KernelCatalogRef kQwenBuildExpertTablePartitionPrefill512Kernel =
     GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_build_expert_table_partition_prefill_512");
 
-static constexpr const LlmMoeDispatchProfile & kMoeRouterProfile                = kQwen30BMoeDispatchProfile;
+static constexpr const LlmMoeDispatchProfile & kMoeRouterProfile                = kActiveLlmMoeDispatchProfile;
 static constexpr size_t                        kMoeRouterPlanTransientAlignment = 256;
 
 static const Value * graph_value(const Graph & graph, ValueId id) {
@@ -61,6 +63,10 @@ static const GraphNode * find_consumer_with_op_and_input(const Graph & graph,
 
 static bool is_shape(const Value & value, int64_t ne0, int64_t ne1, int64_t ne2, int64_t ne3) {
     return value.ne[0] == ne0 && value.ne[1] == ne1 && value.ne[2] == ne2 && value.ne[3] == ne3;
+}
+
+static bool is_2d(const Value & value) {
+    return value.ne[0] > 0 && value.ne[1] > 0 && value.ne[2] == 1 && value.ne[3] == 1;
 }
 
 static bool same_shape(const Value & lhs, const Value & rhs) {
@@ -368,6 +374,15 @@ struct RouterProjectionTop8Match {
     }
 };
 
+struct RouterProjectionMatch {
+    const Value * input       = nullptr;
+    const Value * weight      = nullptr;
+    const Value * output      = nullptr;
+    int64_t       token_count = 0;
+
+    bool matched() const { return input != nullptr && weight != nullptr && output != nullptr && token_count > 0; }
+};
+
 static RouterProjectionTop8Match match_moe_router_projection_top8_decode(const DispatchMatchContext & context,
                                                                          Status *                     status) {
     RouterProjectionTop8Match match;
@@ -403,7 +418,63 @@ static RouterProjectionTop8Match match_moe_router_projection_top8_decode(const D
     return match;
 }
 
+static RouterProjectionMatch match_moe_router_projection_f32(const DispatchMatchContext & context) {
+    RouterProjectionMatch match;
+    const GraphNode *     projection = context.root_node;
+    if (projection == nullptr || projection->op != GGML_OP_MUL_MAT || projection->inputs.size() != 2) {
+        return match;
+    }
+
+    const Value * weight = graph_value(context.graph, projection->inputs[0]);
+    const Value * input  = graph_value(context.graph, projection->inputs[1]);
+    const Value * output = graph_value(context.graph, projection->output);
+    if (weight == nullptr || input == nullptr || output == nullptr || !is_2d(*weight) || !is_2d(*input) ||
+        !is_2d(*output) || !weight->contiguous || !input->contiguous || !output->contiguous ||
+        weight->type != GGML_TYPE_F32 || input->type != GGML_TYPE_F32 || output->type != GGML_TYPE_F32) {
+        return {};
+    }
+
+    const int64_t input_size  = weight->ne[0];
+    const int64_t output_size = weight->ne[1];
+    const int64_t token_count = input->ne[1];
+    if (input_size != kMoeRouterProfile.hidden_size || output_size != kMoeRouterProfile.expert_count ||
+        input->ne[0] != input_size || output->ne[0] != output_size || output->ne[1] != token_count ||
+        !is_llm_supported_query_length(kMoeRouterProfile, token_count)) {
+        return {};
+    }
+
+    match.input       = input;
+    match.weight      = weight;
+    match.output      = output;
+    match.token_count = token_count;
+    return match;
+}
+
 }  // namespace
+
+static bool match_moe_router_projection_f32_dispatch(const DispatchMatchContext & context,
+                                                     DispatchMatch &              dispatch_match) {
+    const RouterProjectionMatch match = match_moe_router_projection_f32(context);
+    if (!match.matched()) {
+        return false;
+    }
+
+    Dispatch dispatch;
+    dispatch.kernel = make_kernel_specialization(kQwenRouterProjectionF32FourRowWave32Kernel);
+    dispatch.kernel.integer_parameters.emplace("token_count", match.token_count);
+    dispatch.kernel.compile_parameters.emplace("qwen3_moe.workload.token_capacity", to_config_value(match.token_count));
+    dispatch.kernel.compile_parameters.emplace("qwen3_moe.model.hidden_size",
+                                               to_config_value(kMoeRouterProfile.hidden_size));
+    dispatch.kernel.compile_parameters.emplace("qwen3_moe.router.expert_count",
+                                               to_config_value(kMoeRouterProfile.expert_count));
+    dispatch.bindings.push_back({ match.input->id, 0, match.input->byte_count });
+    dispatch.bindings.push_back({ match.weight->id, 0, match.weight->byte_count });
+    dispatch.bindings.push_back({ match.output->id, 0, match.output->byte_count });
+
+    dispatch_match.covered_nodes.push_back(context.root_index);
+    dispatch_match.dispatches.push_back(std::move(dispatch));
+    return true;
+}
 
 static bool match_moe_router_projection_top8_fused_decode_dispatch(const DispatchMatchContext & context,
                                                                    DispatchMatch &              dispatch_match) {
@@ -594,6 +665,14 @@ void register_moe_router_dispatches(DispatchRegistryBuilder & registry) {
         1000,
         DispatchSource::Llm,
         match_moe_router_top8_dispatch,
+    });
+    registry.add({
+        "llm.moe_router.projection_f32_four_row_wave32",
+        GGML_OP_MUL_MAT,
+        DispatchMatchKind::SingleOp,
+        90,
+        DispatchSource::Llm,
+        match_moe_router_projection_f32_dispatch,
     });
 }
 

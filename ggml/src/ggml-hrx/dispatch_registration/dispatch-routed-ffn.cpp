@@ -33,7 +33,7 @@ static constexpr KernelCatalogRef kQwenRoutedDownWeightedReduceF16F32Kernel =
 static constexpr KernelCatalogRef kQwenRoutedDownWeightedReduceNextRmsNormF32Kernel =
     GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_f32");
 
-static constexpr const LlmMoeDispatchProfile & kRoutedFfnProfile                 = kQwen30BMoeDispatchProfile;
+static constexpr const LlmMoeDispatchProfile & kRoutedFfnProfile                 = kActiveLlmMoeDispatchProfile;
 static constexpr int64_t                       kRoutedFfnInputSize               = kRoutedFfnProfile.hidden_size;
 static constexpr int64_t                       kRoutedFfnExpertHiddenSize        = kRoutedFfnProfile.expert_hidden_size;
 static constexpr int64_t                       kRoutedFfnExpertCount             = kRoutedFfnProfile.expert_count;
