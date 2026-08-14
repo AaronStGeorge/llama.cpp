@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-    #define GGML_BACKEND_API_VERSION 3
+    #define GGML_BACKEND_API_VERSION 2
 
     //
     // Backend buffer type
@@ -137,9 +137,6 @@ extern "C" {
 
         // (optional) sort/optimize the nodes in the graph
         void                      (*graph_optimize)    (ggml_backend_t backend, struct ggml_cgraph * cgraph);
-
-        // (optional) claim the complete logical graph before per-operation scheduler placement
-        enum ggml_backend_graph_claim_result (*graph_claim)(ggml_backend_t backend, const struct ggml_cgraph * cgraph, enum ggml_backend_graph_claim_mode mode);
     };
 
     struct ggml_backend {

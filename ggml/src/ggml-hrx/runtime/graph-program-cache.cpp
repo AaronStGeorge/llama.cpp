@@ -3,7 +3,6 @@
 #include "dispatch/dispatch-scheduler.h"
 #include "ggml-impl.h"
 #include "ggml.h"
-#include "graph/graph-diagnostics.h"
 
 #include <cstddef>
 #include <cstdlib>
@@ -544,7 +543,6 @@ GraphProgramLookup GraphProgramCache::get_or_build(const ggml_cgraph &  graph,
         result.status.append(imported.status);
         return result;
     }
-    dump_graph_snapshot_from_environment(imported.graph, target, graph.uid);
     return build_from_imported(graph, std::move(imported.graph), corpus, target);
 }
 

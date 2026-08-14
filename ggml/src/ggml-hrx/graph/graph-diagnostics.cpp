@@ -4,7 +4,6 @@
 #include "ggml.h"
 
 #include <atomic>
-#include <cstdlib>
 #include <fstream>
 #include <limits>
 #include <nlohmann/json.hpp>
@@ -439,17 +438,6 @@ Status write_graph_snapshot(const std::filesystem::path & directory,
         status.log("failed to write HRX graph snapshot: %s", error.what());
     }
     return status;
-}
-
-void dump_graph_snapshot_from_environment(const Graph & graph, const std::string & target, uint64_t uid) {
-    const char * directory = std::getenv("GGML_HRX_DUMP_GRAPH_DIR");
-    if (directory == nullptr || directory[0] == '\0') {
-        return;
-    }
-    Status status = write_graph_snapshot(std::filesystem::path(directory) / "graphs", graph, target, uid);
-    if (!status.success()) {
-        GGML_LOG_ERROR("%s\n", status.errors().front().c_str());
-    }
 }
 
 std::string format_schedule_diagnostics_text(const Graph &                       graph,

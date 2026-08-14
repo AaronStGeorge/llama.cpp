@@ -28,7 +28,6 @@ Status write_graph_snapshot(const std::filesystem::path & directory,
                             const Graph &                 graph,
                             const std::string &           target,
                             uint64_t                      uid);
-void   dump_graph_snapshot_from_environment(const Graph & graph, const std::string & target, uint64_t uid);
 
 std::string format_schedule_diagnostics_text(const Graph &                       graph,
                                              const CommandPlan &                 plan,
