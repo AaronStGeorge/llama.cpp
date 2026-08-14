@@ -9,6 +9,8 @@
 namespace ggml::hrx {
 namespace {
 
+static constexpr size_t kMaxInlineUploadBytes = 63 * 1024;
+
 static Status allocate_device_buffer(hrx_device_t device, size_t size, hrx_buffer_t & buffer) {
     Status status;
     if (device == nullptr) {
@@ -51,6 +53,39 @@ Status HostTransferManager::upload(hrx_stream_t stream,
         status.log("HRX host upload failed: %s", error->c_str());
         return status;
     }
+    std::lock_guard<std::mutex> lock(mutex_);
+    ++stats_.uploads;
+    stats_.upload_bytes += size;
+    return status;
+}
+
+Status HostTransferManager::upload_async(hrx_stream_t stream,
+                                         const void * host_source,
+                                         hrx_buffer_t destination,
+                                         size_t       offset,
+                                         size_t       size) {
+    Status status;
+    if (size == 0) {
+        return status;
+    }
+    if (stream == nullptr || host_source == nullptr || destination == nullptr) {
+        status.log("invalid HRX host upload");
+        return status;
+    }
+
+    const uint8_t * host_bytes = static_cast<const uint8_t *>(host_source);
+    size_t          uploaded   = 0;
+    while (uploaded < size) {
+        const size_t remaining  = size - uploaded;
+        const size_t chunk_size = remaining < kMaxInlineUploadBytes ? remaining : kMaxInlineUploadBytes;
+        if (ErrorResult error = take_status(
+                hrx_stream_update_buffer(stream, host_bytes + uploaded, chunk_size, destination, offset + uploaded))) {
+            status.log("HRX async host upload failed: %s", error->c_str());
+            return status;
+        }
+        uploaded += chunk_size;
+    }
+
     std::lock_guard<std::mutex> lock(mutex_);
     ++stats_.uploads;
     stats_.upload_bytes += size;

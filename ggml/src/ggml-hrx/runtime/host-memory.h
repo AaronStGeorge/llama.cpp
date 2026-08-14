@@ -25,6 +25,11 @@ struct HostTransferStats {
 class HostTransferManager {
   public:
     Status upload(hrx_stream_t stream, const void * host_source, hrx_buffer_t destination, size_t offset, size_t size);
+    Status upload_async(hrx_stream_t stream,
+                        const void * host_source,
+                        hrx_buffer_t destination,
+                        size_t       offset,
+                        size_t       size);
     Status download(hrx_stream_t stream, hrx_buffer_t source, size_t offset, void * host_destination, size_t size);
 
     HostTransferStats stats() const;

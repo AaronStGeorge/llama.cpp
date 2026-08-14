@@ -573,7 +573,7 @@ static Status upload_prepared_host_staging(const CommandProgramExecutionContext 
             continue;
         }
         Status upload_status =
-            context.host_transfers->upload(context.stream, staging.host_data, staging.buffer, 0, staging.length);
+            context.host_transfers->upload_async(context.stream, staging.host_data, staging.buffer, 0, staging.length);
         status.append(upload_status);
     }
     return status;
