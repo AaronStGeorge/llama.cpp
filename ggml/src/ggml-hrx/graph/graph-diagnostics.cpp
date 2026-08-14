@@ -51,6 +51,8 @@ const char * dispatch_source_name(DispatchSource source) {
     switch (source) {
         case DispatchSource::Common:
             return "common";
+        case DispatchSource::Llm:
+            return "llm";
         case DispatchSource::Qwen:
             return "qwen";
     }

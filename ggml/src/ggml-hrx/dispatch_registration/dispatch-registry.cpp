@@ -2,13 +2,13 @@
 
 #include "dispatch-add.h"
 #include "dispatch-gather-add.h"
+#include "dispatch-moe-router.h"
 #include "dispatch-qwen-attention-postprocess.h"
 #include "dispatch-qwen-flash-attention.h"
 #include "dispatch-qwen-matmul.h"
-#include "dispatch-qwen-moe.h"
 #include "dispatch-qwen-preamble.h"
-#include "dispatch-qwen-router.h"
 #include "dispatch-rmsnorm.h"
+#include "dispatch-routed-ffn.h"
 
 #include <algorithm>
 #include <utility>
@@ -30,17 +30,21 @@ static void sort_registrations(std::vector<DispatchRegistration> & registrations
         [](const DispatchRegistration & lhs, const DispatchRegistration & rhs) { return lhs.priority > rhs.priority; });
 }
 
+static void register_llm_dispatches(DispatchRegistryBuilder & builder) {
+    register_qwen_attention_postprocess_dispatches(builder);
+    register_qwen_flash_attention_dispatches(builder);
+    register_qwen_matmul_dispatches(builder);
+    register_routed_ffn_dispatches(builder);
+    register_qwen_preamble_dispatches(builder);
+    register_qwen_rmsnorm_dispatches(builder);
+    register_moe_router_dispatches(builder);
+}
+
 static DispatchRegistry build_llm_registry() {
     DispatchRegistryBuilder builder;
     register_add_dispatch(builder);
     register_gather_add_dispatch(builder);
-    register_qwen_attention_postprocess_dispatches(builder);
-    register_qwen_flash_attention_dispatches(builder);
-    register_qwen_matmul_dispatches(builder);
-    register_qwen_moe_dispatches(builder);
-    register_qwen_preamble_dispatches(builder);
-    register_qwen_rmsnorm_dispatches(builder);
-    register_qwen_router_dispatches(builder);
+    register_llm_dispatches(builder);
     return builder.build();
 }
 

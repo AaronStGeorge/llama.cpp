@@ -1,6 +1,6 @@
 #include "dispatch-qwen-matmul.h"
 
-#include "dispatch-qwen-shapes.h"
+#include "dispatch-llm-shapes.h"
 #include "ggml.h"
 #include "graph/graph-matcher.h"
 #include "kernel-corpus/kernel-corpus-catalog-verify.h"

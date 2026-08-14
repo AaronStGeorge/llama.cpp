@@ -22,6 +22,7 @@ enum class DispatchMatchKind {
 
 enum class DispatchSource {
     Common,
+    Llm,
     Qwen,
 };
 

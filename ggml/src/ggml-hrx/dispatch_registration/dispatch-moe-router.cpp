@@ -1,6 +1,6 @@
-#include "dispatch-qwen-router.h"
+#include "dispatch-moe-router.h"
 
-#include "dispatch-qwen-shapes.h"
+#include "dispatch-llm-shapes.h"
 #include "ggml.h"
 #include "graph/graph-matcher.h"
 #include "kernel-corpus/kernel-corpus-catalog-verify.h"
@@ -26,7 +26,8 @@ static constexpr KernelCatalogRef kQwenBuildExpertPartitionTableKernel =
 static constexpr KernelCatalogRef kQwenBuildExpertTablePartitionPrefill512Kernel =
     GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_build_expert_table_partition_prefill_512");
 
-static constexpr size_t kQwenRouterPlanTransientAlignment = 256;
+static constexpr const LlmMoeDispatchProfile & kMoeRouterProfile                = kQwen30BMoeDispatchProfile;
+static constexpr size_t                        kMoeRouterPlanTransientAlignment = 256;
 
 static const Value * graph_value(const Graph & graph, ValueId id) {
     return graph.values().find(id);
@@ -83,7 +84,7 @@ static bool is_supported_route_stride(int64_t route_stride, int64_t route_count,
     return route_stride >= route_count && route_stride <= expert_count;
 }
 
-static bool is_qwen_softmax(const GraphNode & node) {
+static bool is_default_scale_softmax(const GraphNode & node) {
     const SoftMaxParams * params = op_params_as<SoftMaxParams>(node.params);
     return params != nullptr && nearly_equal(params->scale, 1.0f) && nearly_equal(params->max_bias, 0.0f);
 }
@@ -93,7 +94,7 @@ static bool is_descending_argsort(const GraphNode & node) {
     return params != nullptr && params->order == GGML_SORT_ORDER_DESC;
 }
 
-static bool is_qwen_topk_clamp(const GraphNode & node) {
+static bool is_topk_normalization_clamp(const GraphNode & node) {
     const ClampParams * params = op_params_as<ClampParams>(node.params);
     return params != nullptr && params->min >= 0.0f && params->min <= 1.0e-4f && std::isinf(params->max) &&
            params->max > 0.0f;
@@ -128,9 +129,9 @@ static std::string value_summary(const Graph & graph, const Value * value) {
     return stream.str();
 }
 
-static bool is_qwen_router_candidate_root(const Graph & graph, const GraphNode * softmax_node) {
+static bool is_moe_router_candidate_root(const Graph & graph, const GraphNode * softmax_node) {
     if (softmax_node == nullptr || softmax_node->op != GGML_OP_SOFT_MAX || softmax_node->inputs.size() != 1 ||
-        !graph.has_index() || !is_qwen_softmax(*softmax_node)) {
+        !graph.has_index() || !is_default_scale_softmax(*softmax_node)) {
         return false;
     }
     const Value * logits = graph_value(graph, softmax_node->inputs[0]);
@@ -146,12 +147,12 @@ static void log_router_reject(Status *            status,
                               const Graph &       graph,
                               const GraphNode *   node,
                               const std::string & reason) {
-    if (status == nullptr || !is_qwen_router_candidate_root(graph, node)) {
+    if (status == nullptr || !is_moe_router_candidate_root(graph, node)) {
         return;
     }
     const Value * logits = node == nullptr || node->inputs.empty() ? nullptr : graph_value(graph, node->inputs[0]);
     const Value * probs  = node == nullptr ? nullptr : graph_value(graph, node->output);
-    status->log("qwen router top-k matcher rejected node: %s logits=%s probs=%s", reason.c_str(),
+    status->log("MoE router top-k matcher rejected node: %s logits=%s probs=%s", reason.c_str(),
                 value_summary(graph, logits).c_str(), value_summary(graph, probs).c_str());
 }
 
@@ -177,15 +178,15 @@ struct RouterTop8Match {
 
 static bool supports_fused_prefill_expert_table_partition(const RouterTop8Match & router_match) {
     // Matches the reference prefill recipe gate; q=1 uses decode routing paths.
-    return is_qwen_prefill_512_query_length(router_match.token_count) &&
-           router_match.route_count == kQwen30BMoeDispatchProfile.route_count &&
-           router_match.expert_count == kQwen30BMoeDispatchProfile.expert_count;
+    return is_llm_prefill_512_query_length(kMoeRouterProfile, router_match.token_count) &&
+           router_match.route_count == kMoeRouterProfile.route_count &&
+           router_match.expert_count == kMoeRouterProfile.expert_count;
 }
 
-static RouterTop8Match match_qwen_router_top8(const Graph & graph, const GraphNode * softmax_node, Status * status) {
+static RouterTop8Match match_moe_router_top8(const Graph & graph, const GraphNode * softmax_node, Status * status) {
     RouterTop8Match match;
     if (softmax_node == nullptr || softmax_node->op != GGML_OP_SOFT_MAX || softmax_node->inputs.size() != 1 ||
-        !graph.has_index() || !is_qwen_softmax(*softmax_node)) {
+        !graph.has_index() || !is_default_scale_softmax(*softmax_node)) {
         return match;
     }
 
@@ -199,7 +200,7 @@ static RouterTop8Match match_qwen_router_top8(const Graph & graph, const GraphNo
     const int64_t expert_count = logits->ne[0];
     const int64_t token_count  = logits->ne[1];
     if (!is_shape(*logits, expert_count, token_count, 1, 1) || !is_supported_expert_count(expert_count) ||
-        !is_qwen_supported_query_length(token_count)) {
+        !is_llm_supported_query_length(kMoeRouterProfile, token_count)) {
         log_router_reject(status, graph, softmax_node, "unsupported logits expert/token shape");
         return {};
     }
@@ -270,7 +271,7 @@ static RouterTop8Match match_qwen_router_top8(const Graph & graph, const GraphNo
     const GraphNode * clamp       = find_consumer_with_op(graph, sum_rows->output, GGML_OP_CLAMP);
     const Value *     clamped_sum = clamp == nullptr ? nullptr : graph_value(graph, clamp->output);
     if (clamped_sum == nullptr || clamped_sum->type != GGML_TYPE_F32 || !is_shape(*clamped_sum, 1, token_count, 1, 1) ||
-        !is_qwen_topk_clamp(*clamp)) {
+        !is_topk_normalization_clamp(*clamp)) {
         log_router_reject(status, graph, softmax_node, "missing supported CLAMP on selected route weight sum");
         return {};
     }
@@ -301,7 +302,7 @@ static RouterTop8Match match_qwen_router_top8(const Graph & graph, const GraphNo
     return match;
 }
 
-static bool append_qwen_router_top8_coverage(const DispatchMatchContext & context, DispatchMatch & match) {
+static bool append_moe_router_top8_coverage(const DispatchMatchContext & context, DispatchMatch & match) {
     const GraphNode * softmax       = context.root_node;
     const GraphNode * probs_reshape = find_consumer_with_op(context.graph, softmax->output, GGML_OP_RESHAPE);
     const GraphNode * argsort       = find_consumer_with_op(context.graph, softmax->output, GGML_OP_ARGSORT);
@@ -332,9 +333,9 @@ static bool append_qwen_router_top8_coverage(const DispatchMatchContext & contex
            append_covered_node(context, div, match) && append_covered_node(context, output_reshape, match);
 }
 
-static bool append_qwen_router_top8_coverage_from_softmax(const DispatchMatchContext & context,
-                                                          const GraphNode *            softmax,
-                                                          DispatchMatch &              match) {
+static bool append_moe_router_top8_coverage_from_softmax(const DispatchMatchContext & context,
+                                                         const GraphNode *            softmax,
+                                                         DispatchMatch &              match) {
     if (softmax == nullptr) {
         return false;
     }
@@ -343,7 +344,7 @@ static bool append_qwen_router_top8_coverage_from_softmax(const DispatchMatchCon
     if (!context.graph.index().node_index(softmax, softmax_context.root_index)) {
         return false;
     }
-    return append_qwen_router_top8_coverage(softmax_context, match);
+    return append_moe_router_top8_coverage(softmax_context, match);
 }
 
 static void add_routed_gate_up_compile_parameters(Dispatch & dispatch, const RouterTop8Match & router_match) {
@@ -367,8 +368,8 @@ struct RouterProjectionTop8Match {
     }
 };
 
-static RouterProjectionTop8Match match_qwen_router_projection_top8_decode(const DispatchMatchContext & context,
-                                                                          Status *                     status) {
+static RouterProjectionTop8Match match_moe_router_projection_top8_decode(const DispatchMatchContext & context,
+                                                                         Status *                     status) {
     RouterProjectionTop8Match match;
     const GraphNode *         projection = context.root_node;
     if (projection == nullptr || projection->op != GGML_OP_MUL_MAT || projection->inputs.size() != 2 ||
@@ -381,14 +382,14 @@ static RouterProjectionTop8Match match_qwen_router_projection_top8_decode(const 
     const Value * logits = graph_value(context.graph, projection->output);
     if (weight == nullptr || input == nullptr || logits == nullptr || weight->type != GGML_TYPE_F32 ||
         input->type != GGML_TYPE_F32 || logits->type != GGML_TYPE_F32 || !weight->contiguous || !input->contiguous ||
-        !logits->contiguous || !is_shape(*input, kQwen30BMoeDispatchProfile.hidden_size, 1, 1, 1) ||
-        !is_shape(*weight, kQwen30BMoeDispatchProfile.hidden_size, kQwen30BMoeDispatchProfile.expert_count, 1, 1) ||
-        !is_shape(*logits, kQwen30BMoeDispatchProfile.expert_count, 1, 1, 1)) {
+        !logits->contiguous || !is_shape(*input, kMoeRouterProfile.hidden_size, 1, 1, 1) ||
+        !is_shape(*weight, kMoeRouterProfile.hidden_size, kMoeRouterProfile.expert_count, 1, 1) ||
+        !is_shape(*logits, kMoeRouterProfile.expert_count, 1, 1, 1)) {
         return {};
     }
 
     const GraphNode * softmax = find_single_consumer_with_op(context.graph, projection->output, GGML_OP_SOFT_MAX);
-    RouterTop8Match   top8    = match_qwen_router_top8(context.graph, softmax, status);
+    RouterTop8Match   top8    = match_moe_router_top8(context.graph, softmax, status);
     if (!top8.matched() || top8.token_count != 1) {
         return {};
     }
@@ -404,9 +405,9 @@ static RouterProjectionTop8Match match_qwen_router_projection_top8_decode(const 
 
 }  // namespace
 
-static bool match_qwen_router_projection_top8_fused_decode_dispatch(const DispatchMatchContext & context,
-                                                                    DispatchMatch &              dispatch_match) {
-    const RouterProjectionTop8Match match = match_qwen_router_projection_top8_decode(context, &dispatch_match.status);
+static bool match_moe_router_projection_top8_fused_decode_dispatch(const DispatchMatchContext & context,
+                                                                   DispatchMatch &              dispatch_match) {
+    const RouterProjectionTop8Match match = match_moe_router_projection_top8_decode(context, &dispatch_match.status);
     if (!match.matched()) {
         return false;
     }
@@ -417,7 +418,7 @@ static bool match_qwen_router_projection_top8_fused_decode_dispatch(const Dispat
     dispatch.kernel.integer_parameters.emplace("token_count", match.top8.token_count);
     dispatch.kernel.integer_parameters.emplace("route_id_stride", match.top8.route_stride);
     dispatch.kernel.compile_parameters.emplace("qwen3_moe.model.hidden_size",
-                                               to_config_value(kQwen30BMoeDispatchProfile.hidden_size));
+                                               to_config_value(kMoeRouterProfile.hidden_size));
     dispatch.kernel.compile_parameters.emplace("qwen3_moe.router.expert_count",
                                                to_config_value(match.top8.expert_count));
     dispatch.kernel.compile_parameters.emplace("qwen3_moe.router.route_count", to_config_value(match.top8.route_count));
@@ -439,16 +440,16 @@ static bool match_qwen_router_projection_top8_fused_decode_dispatch(const Dispat
         1,
     });
     if (!append_covered_node(context, match.projection, dispatch_match) ||
-        !append_qwen_router_top8_coverage_from_softmax(context, match.softmax, dispatch_match)) {
+        !append_moe_router_top8_coverage_from_softmax(context, match.softmax, dispatch_match)) {
         return false;
     }
     dispatch_match.dispatches.push_back(std::move(dispatch));
     return true;
 }
 
-static bool match_qwen_router_top8_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
+static bool match_moe_router_top8_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
     const RouterTop8Match router_match =
-        match_qwen_router_top8(context.graph, context.root_node, &dispatch_match.status);
+        match_moe_router_top8(context.graph, context.root_node, &dispatch_match.status);
     if (!router_match.matched()) {
         return false;
     }
@@ -470,7 +471,7 @@ static bool match_qwen_router_top8_dispatch(const DispatchMatchContext & context
     dispatch.bindings.push_back({ router_match.route_ids->id, 0, route_id_length });
     dispatch.bindings.push_back({ router_match.route_weights->id, 0, router_match.route_weights->byte_count });
 
-    if (!append_qwen_router_top8_coverage(context, dispatch_match)) {
+    if (!append_moe_router_top8_coverage(context, dispatch_match)) {
         return false;
     }
     dispatch_match.dispatches.push_back(std::move(dispatch));
@@ -483,9 +484,9 @@ static bool match_qwen_router_top8_dispatch(const DispatchMatchContext & context
         partition_table_size(router_match.token_count, router_match.route_count, router_match.expert_count);
     const bool use_fused_prefill_expert_table_partition = supports_fused_prefill_expert_table_partition(router_match);
     dispatch_match.transients.push_back(
-        { expert_table_value, "qwen.router.expert_table", expert_table_bytes, kQwenRouterPlanTransientAlignment });
+        { expert_table_value, "qwen.router.expert_table", expert_table_bytes, kMoeRouterPlanTransientAlignment });
     dispatch_match.transients.push_back({ partition_table_value, "qwen.router.partition_table", partition_table_bytes,
-                                          kQwenRouterPlanTransientAlignment });
+                                          kMoeRouterPlanTransientAlignment });
     if (use_fused_prefill_expert_table_partition) {
         dispatch_match.completion_counter_requests.push_back({
             completion_counter_value,
@@ -493,14 +494,13 @@ static bool match_qwen_router_top8_dispatch(const DispatchMatchContext & context
             1,
         });
     }
-    const CommandPlanResourceMetadata routing_metadata =
-        make_command_plan_resource_metadata(MoeRoutingResourceMetadata{
-            router_match.token_count,
-            router_match.route_count,
-            router_match.route_stride,
-            router_match.expert_count,
-        });
-    Status metadata_status;
+    const CommandPlanResourceMetadata routing_metadata = make_command_plan_resource_metadata(MoeRoutingResourceMetadata{
+        router_match.token_count,
+        router_match.route_count,
+        router_match.route_stride,
+        router_match.expert_count,
+    });
+    Status                            metadata_status;
     if (!dispatch_match.metadata.append_generated_resource(
             {
                 router_match.route_ids->id,
@@ -578,22 +578,22 @@ static bool match_qwen_router_top8_dispatch(const DispatchMatchContext & context
     return true;
 }
 
-void register_qwen_router_dispatches(DispatchRegistryBuilder & registry) {
+void register_moe_router_dispatches(DispatchRegistryBuilder & registry) {
     registry.add({
-        "qwen.router.projection_top8_fused_decode",
+        "llm.moe_router.projection_top8_fused_decode",
         GGML_OP_MUL_MAT,
         DispatchMatchKind::Fused,
         1200,
-        DispatchSource::Qwen,
-        match_qwen_router_projection_top8_fused_decode_dispatch,
+        DispatchSource::Llm,
+        match_moe_router_projection_top8_fused_decode_dispatch,
     });
     registry.add({
-        "qwen.router.top8_f32",
+        "llm.moe_router.top8_f32",
         GGML_OP_SOFT_MAX,
         DispatchMatchKind::Fused,
         1000,
-        DispatchSource::Qwen,
-        match_qwen_router_top8_dispatch,
+        DispatchSource::Llm,
+        match_moe_router_top8_dispatch,
     });
 }
 

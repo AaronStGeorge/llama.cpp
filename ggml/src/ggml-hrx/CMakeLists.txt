@@ -163,22 +163,24 @@ ggml_add_backend_library(ggml-hrx
     dispatch_registration/dispatch-add.h
     dispatch_registration/dispatch-gather-add.cpp
     dispatch_registration/dispatch-gather-add.h
+    dispatch_registration/dispatch-llm-profiles.h
+    dispatch_registration/dispatch-llm-shapes.h
     dispatch_registration/dispatch-qwen-attention-postprocess.cpp
     dispatch_registration/dispatch-qwen-attention-postprocess.h
     dispatch_registration/dispatch-qwen-flash-attention.cpp
     dispatch_registration/dispatch-qwen-flash-attention.h
     dispatch_registration/dispatch-qwen-matmul.cpp
     dispatch_registration/dispatch-qwen-matmul.h
-    dispatch_registration/dispatch-qwen-moe.cpp
-    dispatch_registration/dispatch-qwen-moe.h
+    dispatch_registration/dispatch-moe-router.cpp
+    dispatch_registration/dispatch-moe-router.h
     dispatch_registration/dispatch-qwen-preamble.cpp
     dispatch_registration/dispatch-qwen-preamble.h
-    dispatch_registration/dispatch-qwen-router.cpp
-    dispatch_registration/dispatch-qwen-router.h
     dispatch_registration/dispatch-registry.cpp
     dispatch_registration/dispatch-registry.h
     dispatch_registration/dispatch-rmsnorm.cpp
     dispatch_registration/dispatch-rmsnorm.h
+    dispatch_registration/dispatch-routed-ffn.cpp
+    dispatch_registration/dispatch-routed-ffn.h
     status.h
     graph/graph.cpp
     graph/graph-diagnostics.cpp

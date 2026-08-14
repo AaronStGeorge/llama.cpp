@@ -4,6 +4,6 @@
 
 namespace ggml::hrx {
 
-void register_qwen_moe_dispatches(DispatchRegistryBuilder & registry);
+void register_moe_router_dispatches(DispatchRegistryBuilder & registry);
 
 }  // namespace ggml::hrx
