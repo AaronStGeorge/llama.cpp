@@ -72,6 +72,7 @@ static bool compile_kernel(ggml_hrx_loom_jit_amdgpu *         jit,
     compile_options.source_format                     = request.source_format;
     compile_options.source_identifier                 = request.source_identifier.c_str();
     compile_options.root_symbol                       = request.symbol.c_str();
+    compile_options.launch_config_symbol              = request.launch_config_symbol.c_str();
     compile_options.module_name                       = request.symbol.c_str();
     compile_options.artifact_identifier               = request.symbol.c_str();
     compile_options.dependencies                      = request.dependencies.data();

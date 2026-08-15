@@ -752,13 +752,14 @@ hrx_status_t ggml_hrx_loom_jit_amdgpu_compile(ggml_hrx_loom_jit_amdgpu *        
         if (dependency.source_format == GGML_HRX_LOOM_JIT_SOURCE_FORMAT_BYTECODE) {
             dependency_link_options.role = LOOMC_LINK_PROVIDER_ROLE_INPUT;
         } else {
-            const std::string dependency_text(static_cast<const char *>(dependency.source_data), dependency.source_size);
+            const std::string dependency_text(static_cast<const char *>(dependency.source_data),
+                                              dependency.source_size);
             dependency_link_options.role = dependency_text.find("config.decl") != std::string::npos ?
                                                LOOMC_LINK_PROVIDER_ROLE_INPUT :
                                                LOOMC_LINK_PROVIDER_ROLE_LIBRARY;
         }
-        status                       = loomc_link_index_builder_add_source(link_index_builder.get(), dependency_source,
-                                                                           &dependency_link_options, nullptr);
+        status = loomc_link_index_builder_add_source(link_index_builder.get(), dependency_source,
+                                                     &dependency_link_options, nullptr);
         if (!loomc_status_is_ok(status)) {
             for (loomc_source_t * retained_source : dependency_sources) {
                 loomc_source_release(retained_source);
@@ -795,9 +796,9 @@ hrx_status_t ggml_hrx_loom_jit_amdgpu_compile(ggml_hrx_loom_jit_amdgpu *        
     LoomSource  archived_source;
     LoomSource  specialized_archive_source;
     std::string specialized_archive_text;
-    const bool needs_archive_source = options->dependency_count > 0 ||
-                                      (options->source_format == GGML_HRX_LOOM_JIT_SOURCE_FORMAT_BYTECODE &&
-                                       options->workload_argument_count > 0);
+    const bool  needs_archive_source =
+        options->dependency_count > 0 ||
+        (options->source_format == GGML_HRX_LOOM_JIT_SOURCE_FORMAT_BYTECODE && options->workload_argument_count > 0);
     if (needs_archive_source) {
         LoomModule           archive_module;
         loomc_link_options_t archive_options = {};
@@ -940,11 +941,15 @@ hrx_status_t ggml_hrx_loom_jit_amdgpu_compile(ggml_hrx_loom_jit_amdgpu *        
         return hrx_status;
     }
     if (options->evaluate_launch_config) {
+        const char * launch_config_symbol = options->launch_config_symbol;
+        if (launch_config_symbol == nullptr || launch_config_symbol[0] == '\0') {
+            launch_config_symbol = options->root_symbol;
+        }
         const loomc_artifact_t * launch_config =
             ggml_hrx_loom_jit_find_artifact(result.get(), LOOMC_ARTIFACT_KIND_LAUNCH_CONFIG,
                                             loomc_make_cstring_view(LOOMC_ARTIFACT_FORMAT_LOOM_BYTECODE));
         hrx_status = ggml_hrx_loom_jit_evaluate_launch_config(
-            launch_config, options->root_symbol,
+            launch_config, launch_config_symbol,
             options->workload_argument_count == 0 ? nullptr : options->workload_arguments,
             options->workload_argument_count, &out_result->launch_config);
         if (!hrx_status_is_ok(hrx_status)) {

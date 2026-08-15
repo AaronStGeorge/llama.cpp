@@ -120,6 +120,16 @@ static const ggml::hrx::KernelDefinition & find_kernel(const char * name) {
     std::abort();
 }
 
+static const ggml::hrx::KernelDefinition * find_targeted_kernel(const char * name, const char * target) {
+    const ggml::hrx::KernelCorpus & corpus = ggml::hrx::get_qwen_kernel_corpus();
+    for (const ggml::hrx::KernelDefinition & kernel : corpus.kernels) {
+        if (std::strcmp(kernel.name, name) == 0 && std::strcmp(kernel.target_selector, target) == 0) {
+            return &kernel;
+        }
+    }
+    return nullptr;
+}
+
 static ggml::hrx::Dispatch make_add_dispatch(const ggml::hrx::KernelDefinition & definition, int64_t element_count) {
     ggml::hrx::Dispatch dispatch;
     dispatch.kernel.kernel_id = definition.id;
@@ -144,11 +154,12 @@ static ggml::hrx::LoomKernelCompileRequest make_compile_request(
 
     const ggml::hrx::KernelSourceRef & primary_source = definition.compile_recipe.primary_sources.front();
     REQUIRE(primary_source.contents != nullptr);
-    request.source_data       = primary_source.contents->source.data;
-    request.source_size       = primary_source.contents->source.length;
-    request.source_format     = to_jit_source_format(primary_source.contents->source.format);
-    request.source_identifier = primary_source.path != nullptr ? primary_source.path : "";
-    request.symbol            = definition.symbol != nullptr ? definition.symbol : "";
+    request.source_data          = primary_source.contents->source.data;
+    request.source_size          = primary_source.contents->source.length;
+    request.source_format        = to_jit_source_format(primary_source.contents->source.format);
+    request.source_identifier    = primary_source.path != nullptr ? primary_source.path : "";
+    request.symbol               = definition.symbol != nullptr ? definition.symbol : "";
+    request.launch_config_symbol = definition.name != nullptr ? definition.name : "";
 
     request.dependencies.reserve(definition.compile_recipe.library_sources.size());
     for (const ggml::hrx::KernelSourceRef & dependency_ref : definition.compile_recipe.library_sources) {
@@ -261,6 +272,36 @@ static void run_cache_materialize_case(HrxTestDevice &                     devic
     std::printf("%s KernelExecutableCache materialized ggml_add_f32 for %s\n", mode_name, device.architecture.c_str());
 }
 
+static void run_targeted_export_materialize_case(HrxTestDevice & device) {
+    const ggml::hrx::KernelDefinition * definition =
+        find_targeted_kernel("ggml_linear_q6k_q8_1_x4", device.architecture.c_str());
+    if (definition == nullptr) {
+        return;
+    }
+
+    ggml::hrx::KernelExecutablePrepareContext context = {};
+    context.device                                    = device.device;
+    context.target                                    = device.architecture.c_str();
+
+    ggml::hrx::Dispatch dispatch;
+    dispatch.kernel.kernel_id = definition->id;
+    dispatch.kernel.integer_parameters.emplace("token_count", 1);
+    dispatch.kernel.integer_parameters.emplace("input_size", 2048);
+    dispatch.kernel.integer_parameters.emplace("output_size", 151936);
+    dispatch.kernel.compile_parameters.emplace("ggml.linear_q6k_q8_1_x4.token_capacity", "1");
+    dispatch.kernel.compile_parameters.emplace("ggml.linear_q6k_q8_1_x4.output_capacity", "151936");
+    dispatch.bindings.resize(3);
+
+    ggml::hrx::KernelExecutableCache             cache(ggml::hrx::LoomJitMode::Sync);
+    std::vector<uint8_t>                         constants;
+    std::shared_ptr<ggml::hrx::KernelExecutable> executable = cache.prepare(context, *definition, dispatch, constants);
+    REQUIRE(executable != nullptr);
+    REQUIRE(executable->executable != nullptr);
+    REQUIRE(executable->launch.workgroup_count[0] == 151936);
+    std::printf("KernelExecutableCache materialized targeted %s as export %s for %s\n", definition->symbol,
+                definition->name, device.architecture.c_str());
+}
+
 }  // namespace
 
 int main() {
@@ -362,7 +403,7 @@ int main() {
                                   {
                                       { "source_token_count", 2    },
                                       { "output_token_count", 1    },
-                                      { "hidden_size",         2048 },
+                                      { "hidden_size",        2048 },
     }));
     const auto    enqueue_end = std::chrono::steady_clock::now();
     const int64_t enqueue_us  = elapsed_us(enqueue_begin, enqueue_end);
@@ -381,6 +422,7 @@ int main() {
     if (device.open()) {
         run_cache_materialize_case(device, ggml::hrx::LoomJitMode::Sync, add);
         run_cache_materialize_case(device, ggml::hrx::LoomJitMode::Async, add);
+        run_targeted_export_materialize_case(device);
     } else {
         std::printf("skipping KernelExecutableCache materialization checks: no HRX device available\n");
     }

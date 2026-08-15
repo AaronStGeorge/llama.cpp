@@ -20,6 +20,7 @@ struct LoomKernelCompileRequest {
     ggml_hrx_loom_jit_source_format                  source_format = GGML_HRX_LOOM_JIT_SOURCE_FORMAT_TEXT;
     std::string                                      source_identifier;
     std::string                                      symbol;
+    std::string                                      launch_config_symbol;
     std::vector<ggml_hrx_loom_jit_source>            dependencies;
     std::vector<std::pair<std::string, std::string>> config_storage;
     std::vector<int64_t>                             workload;

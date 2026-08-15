@@ -89,11 +89,12 @@ static bool build_compile_request(const KernelDefinition &   definition,
         return false;
     }
 
-    request.source_data       = source->source.data;
-    request.source_size       = source->source.length;
-    request.source_format     = to_jit_source_format(source->source.format);
-    request.source_identifier = primary_source.path != nullptr ? primary_source.path : "";
-    request.symbol            = definition.symbol != nullptr ? definition.symbol : "";
+    request.source_data          = source->source.data;
+    request.source_size          = source->source.length;
+    request.source_format        = to_jit_source_format(source->source.format);
+    request.source_identifier    = primary_source.path != nullptr ? primary_source.path : "";
+    request.symbol               = definition.symbol != nullptr ? definition.symbol : "";
+    request.launch_config_symbol = definition.name != nullptr ? definition.name : "";
 
     request.dependencies.reserve(definition.compile_recipe.library_sources.size());
     for (const KernelSourceRef & dependency_ref : definition.compile_recipe.library_sources) {
@@ -164,7 +165,7 @@ static std::shared_ptr<KernelExecutable> load_kernel_executable(const KernelExec
         GGML_LOG_ERROR("%s: %s\n", __func__, error_message.c_str());
         return nullptr;
     }
-    if (ErrorResult error = take_status(hrx_executable_lookup_export_by_name(executable->executable, definition.symbol,
+    if (ErrorResult error = take_status(hrx_executable_lookup_export_by_name(executable->executable, definition.name,
                                                                              &executable->export_ordinal))) {
         error_message = "lookup " + key + ": " + *error;
         GGML_LOG_ERROR("%s: %s\n", __func__, error_message.c_str());

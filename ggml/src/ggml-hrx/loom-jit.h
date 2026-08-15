@@ -52,6 +52,7 @@ struct ggml_hrx_loom_jit_compile_options {
     ggml_hrx_loom_jit_source_format          source_format           = ggml_hrx_loom_jit_source_format::Text;
     const char *                             source_identifier       = nullptr;
     const char *                             root_symbol             = nullptr;
+    const char *                             launch_config_symbol    = nullptr;
     const char *                             module_name             = nullptr;
     const char *                             artifact_identifier     = nullptr;
     const ggml_hrx_loom_jit_source *         dependencies            = nullptr;
