@@ -186,6 +186,7 @@ static bool supports_fused_prefill_expert_table_partition(const RouterTop8Match 
     // Matches the reference prefill recipe gate; q=1 uses decode routing paths.
     return is_llm_prefill_512_query_length(kMoeRouterProfile, router_match.token_count) &&
            router_match.route_count == kMoeRouterProfile.route_count &&
+           router_match.route_stride == router_match.route_count &&
            router_match.expert_count == kMoeRouterProfile.expert_count;
 }
 

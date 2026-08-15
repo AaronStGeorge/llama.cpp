@@ -2414,7 +2414,9 @@ static void schedule_qwen_router_top8_command(ggml_context * ctx,
     const size_t  partition_table_bytes =
         qwen_partition_table_size(token_count, expected_route_count, expected_expert_count);
     const bool uses_fused_prefill_expert_table_partition =
-        token_count == 512 && expected_route_count == 8 && expected_expert_count == 128;
+        token_count == 512 && expected_route_count == 8 &&
+        route_ids->nb[1] / sizeof(int32_t) == static_cast<size_t>(expected_route_count) &&
+        expected_expert_count == 128;
     REQUIRE(scheduler.plan().dispatches.size() == (uses_fused_prefill_expert_table_partition ? 2 : 3));
     REQUIRE(scheduler.plan().transients.size() == 2);
     REQUIRE(scheduler.plan().constant_initializations.empty());
