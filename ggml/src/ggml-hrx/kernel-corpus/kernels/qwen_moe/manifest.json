@@ -3,9 +3,10 @@
   "upstream_repository": "https://github.com/rocm/hrx",
   "upstream_revision": "d343e4ad5167dca6758cb0d2db08785e43e99070",
   "source_subdirectory": "experimental/qwen_moe/kernels",
-  "corpus_sha256": "7931df8af8a0f4fceabf527fb25c4e606611b95d4f080d0fe5df0cdc31b7e281",
-  "upstream_corpus_sha256": "a314bf4cfcc637a8271b1e682f5b44b884c9180dcc30f22722b0cafc567be0d8",
-  "owned_corpus_sha256": "bf129cc583efa377f3cf2d84178356486cb9e7a88f3e1816695fc1fe8d4e20cb",
+  "qwen_endpoint_source_subdirectory": "experimental/qwen/kernels",
+  "corpus_sha256": "ce2711ba360db150344d63658b6fc0024954e4ad4c598233caed7680ca85f993",
+  "upstream_corpus_sha256": "76f504d2c19e85a1b51679bb2edc5e9a60b865f545ecaabacedd14ba7db15842",
+  "owned_corpus_sha256": "1126fc55f6123c13ee9a8a8d146082bd9b63d9fd1ed123e27478ff964e58ad44",
   "build_bazel_sha256": "598eeb34f8606182a732299c989387dd450c0d8f33e4275635b4a679c0f986d0",
   "files": [
     {
@@ -152,6 +153,18 @@
       "path": "qwen3_moe/router_top8_f32.loom",
       "sha256": "84738d2baee5b1a54dff2939a933024222fe8dee76ea30d71af1921b23a9e665",
       "size": 14431
+    },
+    {
+      "path": "../qwen_owned/token_embedding_q4k.loom",
+      "sha256": "5cb5eed0b07991e1af246965bfeff0034b066d1645d5d38cbcdd63757dee5c9a",
+      "size": 12428,
+      "upstream_path": "experimental/qwen/kernels/token_embedding_q4k.loom"
+    },
+    {
+      "path": "../qwen_owned/attention_metadata.loom",
+      "sha256": "9614108d1680e6d0d86187c75ce0505e44fb1f53f3117f38baf56ab686b0632c",
+      "size": 13620,
+      "upstream_path": "experimental/qwen/kernels/attention_metadata.loom"
     },
     {
       "path": "../qwen_owned/token_embedding_bringup_workaround.loom",
@@ -4240,6 +4253,54 @@
       "compile_dependencies": []
     },
     {
+      "name": "qwen_attention_metadata",
+      "symbol": "qwen_attention_metadata",
+      "source": "../qwen_owned/attention_metadata.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "context_capacity",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "context_capacity",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "control",
+        "positions",
+        "key_cache_indices",
+        "value_cache_indices",
+        "attention_mask"
+      ],
+      "binding_access": [
+        "read",
+        "read_write",
+        "read_write",
+        "read_write",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "../qwen_owned/attention_metadata.loom"
+        ],
+        "library_sources": []
+      },
+      "compile_dependencies": []
+    },
+    {
       "name": "qwen_attention_metadata_bringup_workaround",
       "symbol": "qwen_attention_metadata_bringup_workaround",
       "source": "../qwen_owned/attention_metadata_bringup_workaround.loom",
@@ -4282,6 +4343,78 @@
         "mode": "direct",
         "primary_sources": [
           "../qwen_owned/attention_metadata_bringup_workaround.loom"
+        ],
+        "library_sources": []
+      },
+      "compile_dependencies": []
+    },
+    {
+      "name": "qwen_decode_attention_metadata",
+      "symbol": "qwen_decode_attention_metadata",
+      "source": "../qwen_owned/attention_metadata.loom",
+      "workload_parameters": [],
+      "launch_parameters": [],
+      "bindings": [
+        "control",
+        "positions",
+        "key_cache_indices",
+        "value_cache_indices"
+      ],
+      "binding_access": [
+        "read",
+        "read_write",
+        "read_write",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "../qwen_owned/attention_metadata.loom"
+        ],
+        "library_sources": []
+      },
+      "compile_dependencies": []
+    },
+    {
+      "name": "qwen_token_embedding_q4k",
+      "symbol": "qwen_token_embedding_q4k",
+      "source": "../qwen_owned/token_embedding_q4k.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "vocabulary_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "vocabulary_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "token_ids",
+        "weight",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "../qwen_owned/token_embedding_q4k.loom"
         ],
         "library_sources": []
       },
@@ -5020,26 +5153,24 @@
     {
       "name": "owned_token_embedding_decode_plan_test",
       "args": [
-        "$(location ../qwen_owned/token_embedding_bringup_workaround.loom)",
-        "--benchmark=@qwen_token_embedding_q4k_model_decode",
+        "$(location ../qwen_owned/token_embedding_q4k.loom)",
+        "--benchmark=@qwen_token_embedding_q4k_decode",
         "--dry-run",
         "--output-format=jsonl",
         "--sample-compilation=per_sample"
       ],
-      "source": "../qwen_owned/token_embedding_bringup_workaround.loom",
-      "owner": "ggml-hrx"
+      "source": "../qwen_owned/token_embedding_q4k.loom"
     },
     {
       "name": "owned_token_embedding_prefill_plan_test",
       "args": [
-        "$(location ../qwen_owned/token_embedding_bringup_workaround.loom)",
+        "$(location ../qwen_owned/token_embedding_q4k.loom)",
         "--benchmark=@qwen_token_embedding_q4k_prefill_512",
         "--dry-run",
         "--output-format=jsonl",
         "--sample-compilation=per_sample"
       ],
-      "source": "../qwen_owned/token_embedding_bringup_workaround.loom",
-      "owner": "ggml-hrx"
+      "source": "../qwen_owned/token_embedding_q4k.loom"
     },
     {
       "name": "owned_attention_context_base_capture_plan_test",
@@ -5066,28 +5197,15 @@
       "owner": "ggml-hrx"
     },
     {
-      "name": "owned_attention_metadata_decode_plan_test",
-      "args": [
-        "$(location ../qwen_owned/attention_metadata_bringup_workaround.loom)",
-        "--benchmark=@qwen_attention_metadata_decode_768",
-        "--dry-run",
-        "--output-format=jsonl",
-        "--sample-compilation=per_sample"
-      ],
-      "source": "../qwen_owned/attention_metadata_bringup_workaround.loom",
-      "owner": "ggml-hrx"
-    },
-    {
       "name": "owned_attention_metadata_prefill_plan_test",
       "args": [
-        "$(location ../qwen_owned/attention_metadata_bringup_workaround.loom)",
-        "--benchmark=@qwen_attention_metadata_model_prefill_512",
+        "$(location ../qwen_owned/attention_metadata.loom)",
+        "--benchmark=@qwen_attention_metadata_prefill_512",
         "--dry-run",
         "--output-format=jsonl",
         "--sample-compilation=per_sample"
       ],
-      "source": "../qwen_owned/attention_metadata_bringup_workaround.loom",
-      "owner": "ggml-hrx"
+      "source": "../qwen_owned/attention_metadata.loom"
     },
     {
       "name": "owned_gather_add_plan_test",

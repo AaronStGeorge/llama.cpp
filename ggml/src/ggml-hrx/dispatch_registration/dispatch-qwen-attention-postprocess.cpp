@@ -22,8 +22,8 @@ static constexpr KernelCatalogRef kQwenAttentionQkvPostprocessFusedDecodeKernel 
     GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_attention_qkv_postprocess_fused_decode");
 static constexpr KernelCatalogRef kQwenAttentionContextBaseCaptureKernel =
     GGML_HRX_KERNEL_REF("qwen3_moe", "qwen_attention_context_base_capture");
-static constexpr KernelCatalogRef kQwenAttentionMetadataBringupKernel =
-    GGML_HRX_KERNEL_REF("qwen3_moe", "qwen_attention_metadata_bringup_workaround");
+static constexpr KernelCatalogRef kQwenAttentionMetadataKernel =
+    GGML_HRX_KERNEL_REF("qwen3_moe", "qwen_attention_metadata");
 static constexpr int64_t kQwenAttentionHeadSize = 128;
 
 static const Value * graph_value(const Graph & graph, ValueId id) {
@@ -718,7 +718,7 @@ static bool append_postprocess_covered_nodes(const DispatchMatchContext &      c
 
 static bool has_attention_metadata_initialization(const CommandPlan & plan) {
     for (const Dispatch & dispatch : plan.initialization_dispatches) {
-        if (dispatch.kernel.kernel_id == kQwenAttentionMetadataBringupKernel.id) {
+        if (dispatch.kernel.kernel_id == kQwenAttentionMetadataKernel.id) {
             return true;
         }
     }
@@ -755,7 +755,7 @@ static bool append_attention_metadata_initialization(const DispatchMatchContext 
     dispatch_match.initialization_dispatches.push_back(std::move(context_capture));
 
     Dispatch metadata;
-    metadata.kernel = make_kernel_specialization(kQwenAttentionMetadataBringupKernel);
+    metadata.kernel = make_kernel_specialization(kQwenAttentionMetadataKernel);
     metadata.kernel.integer_parameters.emplace("token_count", match.query.token_count);
     metadata.kernel.integer_parameters.emplace("context_capacity", mask->ne[0]);
     metadata.bindings.push_back({ control, 0, sizeof(int32_t) });

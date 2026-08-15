@@ -16,6 +16,7 @@ import tempfile
 
 
 SOURCE_SUBDIR = pathlib.Path("experimental/qwen_moe/kernels")
+QWEN_ENDPOINT_SOURCE_SUBDIR = pathlib.Path("experimental/qwen/kernels")
 CORPUS_FILES = (
     "ggml/linear_q6k_f32.loom",
     "ggml/linear_q6k_q8_1_x4.loom",
@@ -46,6 +47,10 @@ CORPUS_FILES = (
     "qwen3_moe/router_projection_f32.loom",
     "qwen3_moe/router_projection_top8_fused_f32.loom",
     "qwen3_moe/router_top8_f32.loom",
+)
+QWEN_ENDPOINT_FILES = (
+    ("token_embedding_q4k.loom", "qwen_owned/token_embedding_q4k.loom"),
+    ("attention_metadata.loom", "qwen_owned/attention_metadata.loom"),
 )
 
 # These integration kernels are deliberately owned by the llama.cpp HRX
@@ -82,6 +87,10 @@ def binding_access(symbol: str, name: str) -> str:
     if symbol == "qwen_attention_decode_state_initialize":
         return "read" if name == "positions" else "write"
     if symbol == "qwen_attention_metadata_bringup_workaround" and name != "control":
+        return "read_write"
+    if symbol == "qwen_attention_metadata" and name != "control":
+        return "read_write"
+    if symbol == "qwen_decode_attention_metadata" and name != "control":
         return "read_write"
     if symbol == "qwen3_moe_router_top8_f32" and name in ("route_ids", "route_weights"):
         return "write"
@@ -356,6 +365,31 @@ def construct(source_root: pathlib.Path, destination: pathlib.Path, expected_rev
         exports.extend(parse_exports(source_text, relative_text))
         merge_amdgpu_targets(target_selectors, parse_amdgpu_targets(source_text))
 
+    endpoint_source_directory = source_root / QWEN_ENDPOINT_SOURCE_SUBDIR
+    for source_text_name, local_text_name in QWEN_ENDPOINT_FILES:
+        source = endpoint_source_directory / source_text_name
+        if not source.is_file():
+            raise RuntimeError(f"missing required Qwen endpoint source: {source}")
+        data = source.read_bytes()
+        digest = sha256(data)
+        provenance_path = f"{QWEN_ENDPOINT_SOURCE_SUBDIR.as_posix()}/{source_text_name}"
+        upstream_aggregate.update(provenance_path.encode())
+        upstream_aggregate.update(b"\0")
+        upstream_aggregate.update(bytes.fromhex(digest))
+        relative_text = f"../{local_text_name}"
+        target = destination.parent / local_text_name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+        file_rows.append({
+            "path": relative_text,
+            "sha256": digest,
+            "size": len(data),
+            "upstream_path": provenance_path,
+        })
+        source_text = data.decode("utf-8")
+        exports.extend(parse_exports(source_text, relative_text))
+        merge_amdgpu_targets(target_selectors, parse_amdgpu_targets(source_text))
+
     owned_aggregate = hashlib.sha256()
     for filename in OWNED_FILES:
         source = OWNED_KERNEL_DIR / filename
@@ -432,19 +466,17 @@ def construct(source_root: pathlib.Path, destination: pathlib.Path, expected_rev
     plan_cases.extend([
         {
             "name": "owned_token_embedding_decode_plan_test",
-            "args": ["$(location ../qwen_owned/token_embedding_bringup_workaround.loom)",
-                     "--benchmark=@qwen_token_embedding_q4k_model_decode", "--dry-run",
+            "args": ["$(location ../qwen_owned/token_embedding_q4k.loom)",
+                     "--benchmark=@qwen_token_embedding_q4k_decode", "--dry-run",
                      "--output-format=jsonl", "--sample-compilation=per_sample"],
-            "source": "../qwen_owned/token_embedding_bringup_workaround.loom",
-            "owner": "ggml-hrx",
+            "source": "../qwen_owned/token_embedding_q4k.loom",
         },
         {
             "name": "owned_token_embedding_prefill_plan_test",
-            "args": ["$(location ../qwen_owned/token_embedding_bringup_workaround.loom)",
+            "args": ["$(location ../qwen_owned/token_embedding_q4k.loom)",
                      "--benchmark=@qwen_token_embedding_q4k_prefill_512", "--dry-run",
                      "--output-format=jsonl", "--sample-compilation=per_sample"],
-            "source": "../qwen_owned/token_embedding_bringup_workaround.loom",
-            "owner": "ggml-hrx",
+            "source": "../qwen_owned/token_embedding_q4k.loom",
         },
         {
             "name": "owned_attention_context_base_capture_plan_test",
@@ -463,20 +495,11 @@ def construct(source_root: pathlib.Path, destination: pathlib.Path, expected_rev
             "owner": "ggml-hrx",
         },
         {
-            "name": "owned_attention_metadata_decode_plan_test",
-            "args": ["$(location ../qwen_owned/attention_metadata_bringup_workaround.loom)",
-                     "--benchmark=@qwen_attention_metadata_decode_768", "--dry-run",
-                     "--output-format=jsonl", "--sample-compilation=per_sample"],
-            "source": "../qwen_owned/attention_metadata_bringup_workaround.loom",
-            "owner": "ggml-hrx",
-        },
-        {
             "name": "owned_attention_metadata_prefill_plan_test",
-            "args": ["$(location ../qwen_owned/attention_metadata_bringup_workaround.loom)",
-                     "--benchmark=@qwen_attention_metadata_model_prefill_512", "--dry-run",
+            "args": ["$(location ../qwen_owned/attention_metadata.loom)",
+                     "--benchmark=@qwen_attention_metadata_prefill_512", "--dry-run",
                      "--output-format=jsonl", "--sample-compilation=per_sample"],
-            "source": "../qwen_owned/attention_metadata_bringup_workaround.loom",
-            "owner": "ggml-hrx",
+            "source": "../qwen_owned/attention_metadata.loom",
         },
         {
             "name": "owned_gather_add_plan_test",
@@ -499,6 +522,7 @@ def construct(source_root: pathlib.Path, destination: pathlib.Path, expected_rev
         "upstream_repository": upstream_repository(source_root),
         "upstream_revision": revision,
         "source_subdirectory": SOURCE_SUBDIR.as_posix(),
+        "qwen_endpoint_source_subdirectory": QWEN_ENDPOINT_SOURCE_SUBDIR.as_posix(),
         "corpus_sha256": combined_aggregate.hexdigest(),
         "upstream_corpus_sha256": upstream_digest,
         "owned_corpus_sha256": owned_digest,
@@ -517,6 +541,29 @@ def trees_equal(lhs: pathlib.Path, rhs: pathlib.Path) -> bool:
     return lhs_files == rhs_files and all((lhs / path).read_bytes() == (rhs / path).read_bytes() for path in lhs_files)
 
 
+def endpoint_files_equal(generated_qwen_moe: pathlib.Path, destination_qwen_moe: pathlib.Path) -> bool:
+    generated_kernel_root = generated_qwen_moe.parent
+    destination_kernel_root = destination_qwen_moe.parent
+    for _, local_text_name in QWEN_ENDPOINT_FILES:
+        relative = pathlib.Path(local_text_name)
+        generated = generated_kernel_root / relative
+        destination = destination_kernel_root / relative
+        if not destination.is_file() or generated.read_bytes() != destination.read_bytes():
+            return False
+    return True
+
+
+def copy_endpoint_files(generated_qwen_moe: pathlib.Path, destination_qwen_moe: pathlib.Path) -> None:
+    generated_kernel_root = generated_qwen_moe.parent
+    destination_kernel_root = destination_qwen_moe.parent
+    for _, local_text_name in QWEN_ENDPOINT_FILES:
+        relative = pathlib.Path(local_text_name)
+        source = generated_kernel_root / relative
+        target = destination_kernel_root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--hrx-source", type=pathlib.Path, required=True)
@@ -526,10 +573,11 @@ def main() -> int:
     args = parser.parse_args()
 
     with tempfile.TemporaryDirectory(prefix="hrx-qwen-corpus-") as temporary:
-        generated = pathlib.Path(temporary)
+        generated = pathlib.Path(temporary) / args.destination.name
         construct(args.hrx_source.resolve(), generated, args.expect_revision)
         if args.check:
-            if not args.destination.is_dir() or not trees_equal(generated, args.destination):
+            if (not args.destination.is_dir() or not trees_equal(generated, args.destination) or
+                    not endpoint_files_equal(generated, args.destination)):
                 print("mirrored Qwen kernel corpus is stale", file=sys.stderr)
                 return 1
             return 0
@@ -540,6 +588,7 @@ def main() -> int:
             else:
                 child.unlink()
         shutil.copytree(generated, args.destination, dirs_exist_ok=True)
+        copy_endpoint_files(generated, args.destination)
     return 0
 
 
