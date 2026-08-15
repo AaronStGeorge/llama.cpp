@@ -400,7 +400,7 @@ static void run_status_checks() {
 }
 
 static void run_command_plan_metadata_checks() {
-    const ggml::hrx::QwenMoeRoutingResourceMetadata routing = {
+    const ggml::hrx::MoeRoutingResourceMetadata routing = {
         4,
         8,
         128,
@@ -408,8 +408,8 @@ static void run_command_plan_metadata_checks() {
     };
     const ggml::hrx::CommandPlanResourceMetadata metadata = ggml::hrx::make_command_plan_resource_metadata(routing);
 
-    REQUIRE(metadata.kind == ggml::hrx::CommandPlanResourceMetadataKind::QwenMoeRoutingResource);
-    ggml::hrx::QwenMoeRoutingResourceMetadata decoded;
+    REQUIRE(metadata.kind == ggml::hrx::CommandPlanResourceMetadataKind::MoeRoutingResource);
+    ggml::hrx::MoeRoutingResourceMetadata decoded;
     REQUIRE(metadata.read(decoded));
     REQUIRE(decoded.token_count == routing.token_count);
     REQUIRE(decoded.route_count == routing.route_count);
@@ -435,7 +435,7 @@ static void run_command_plan_metadata_checks() {
 
     ggml::hrx::CommandPlanMetadata                bundle_plan;
     ggml::hrx::Status                             bundle_status;
-    const ggml::hrx::CommandPlanQwenRoutingBundle bundle = {
+    const ggml::hrx::CommandPlanMoeRoutingBundle bundle = {
         ggml::hrx::ValueId(10),
         ggml::hrx::ValueId(11),
         ggml::hrx::ValueId(12),
@@ -447,18 +447,18 @@ static void run_command_plan_metadata_checks() {
         128,
         128,
     };
-    REQUIRE(bundle_plan.append_qwen_routing_bundle(bundle, bundle_status));
-    REQUIRE(bundle_plan.append_qwen_routing_bundle(bundle, bundle_status));
-    REQUIRE(bundle_plan.qwen_routing_bundles().size() == 1);
-    const ggml::hrx::CommandPlanQwenRoutingBundle * found_bundle =
-        bundle_plan.find_qwen_routing_bundle(ggml::hrx::ValueId(10));
+    REQUIRE(bundle_plan.append_moe_routing_bundle(bundle, bundle_status));
+    REQUIRE(bundle_plan.append_moe_routing_bundle(bundle, bundle_status));
+    REQUIRE(bundle_plan.moe_routing_bundles().size() == 1);
+    const ggml::hrx::CommandPlanMoeRoutingBundle * found_bundle =
+        bundle_plan.find_moe_routing_bundle(ggml::hrx::ValueId(10));
     REQUIRE(found_bundle != nullptr);
     REQUIRE(found_bundle->route_weights == ggml::hrx::ValueId(11));
     REQUIRE(found_bundle->expert_table == ggml::hrx::ValueId(12));
     REQUIRE(found_bundle->partition_table == ggml::hrx::ValueId(13));
-    ggml::hrx::CommandPlanQwenRoutingBundle conflicting_bundle = bundle;
+    ggml::hrx::CommandPlanMoeRoutingBundle conflicting_bundle = bundle;
     conflicting_bundle.route_weights                           = ggml::hrx::ValueId(14);
-    REQUIRE(!bundle_plan.append_qwen_routing_bundle(conflicting_bundle, bundle_status));
+    REQUIRE(!bundle_plan.append_moe_routing_bundle(conflicting_bundle, bundle_status));
     REQUIRE(!bundle_status.success());
 }
 
@@ -507,12 +507,12 @@ static void run_dispatch_registry_checks() {
 
     REQUIRE(has_dispatch_registration(registry.registrations_for_root(GGML_OP_ADD), "common.add_f32"));
     REQUIRE(
-        has_dispatch_registration(registry.registrations_for_root(GGML_OP_MUL_MAT), "qwen.matmul.dense_q4k_f16_wmma"));
+        has_dispatch_registration(registry.registrations_for_root(GGML_OP_MUL_MAT), "llm.matmul.dense_q4k_f16_wmma"));
     REQUIRE(
-        has_dispatch_registration(registry.registrations_for_root(GGML_OP_MUL_MAT), "qwen.matmul.dense_q6k_f16_wmma"));
+        has_dispatch_registration(registry.registrations_for_root(GGML_OP_MUL_MAT), "llm.matmul.dense_q6k_f16_wmma"));
     REQUIRE(has_dispatch_registration(registry.registrations_for_root(GGML_OP_MUL_MAT), "qwen.matmul.q6k_q8_1_x4"));
     REQUIRE(has_dispatch_registration(registry.registrations_for_root(GGML_OP_MUL_MAT),
-                                      "qwen.matmul.router_projection_f32_four_row_wave32"));
+                                      "llm.moe_router.projection_f32_four_row_wave32"));
     REQUIRE(
         has_dispatch_registration(registry.registrations_for_root(GGML_OP_RMS_NORM), "qwen.rmsnorm_f32.mul_weight"));
     REQUIRE(has_dispatch_registration(registry.registrations_for_root(GGML_OP_RMS_NORM),
@@ -524,13 +524,13 @@ static void run_dispatch_registry_checks() {
     REQUIRE(has_dispatch_registration(registry.registrations_for_root(GGML_OP_GET_ROWS),
                                       "qwen.preamble.token_embedding_q4k"));
     REQUIRE(has_dispatch_registration(registry.registrations_for_root(GGML_OP_GET_ROWS), "common.gather_add_f32"));
-    REQUIRE(has_dispatch_registration(registry.registrations_for_root(GGML_OP_SOFT_MAX), "qwen.router.top8_f32"));
+    REQUIRE(has_dispatch_registration(registry.registrations_for_root(GGML_OP_SOFT_MAX), "llm.moe_router.top8_f32"));
     REQUIRE(has_dispatch_registration(registry.registrations_for_root(GGML_OP_MUL_MAT_ID),
-                                      "qwen.moe.routed_gate_up_swiglu_q4k_f16_wmma"));
+                                      "llm.routed_ffn.gate_up_swiglu_q4k_f16_wmma"));
     REQUIRE(has_dispatch_registration(registry.registrations_for_root(GGML_OP_MUL_MAT_ID),
-                                      "qwen.moe.routed_down_q4k_f16_wmma_grouped"));
+                                      "llm.routed_ffn.down_q4k_f16_wmma_grouped"));
     REQUIRE(has_dispatch_registration(registry.registrations_for_root(GGML_OP_MUL_MAT_ID),
-                                      "qwen.moe.routed_down_q6k_f16_wmma_grouped"));
+                                      "llm.routed_ffn.down_q6k_f16_wmma_grouped"));
     REQUIRE(registry.single_op_registrations().size() >= 5);
 
     ggml::hrx::DispatchRegistryBuilder builder;
@@ -1553,8 +1553,7 @@ static bool manual_token_embedding_graph_is_supported(ggml_context * ctx,
 static void schedule_qwen_token_embedding_command(ggml_context * ctx,
                                                   ggml_tensor *  output,
                                                   int64_t        expected_token_count,
-                                                  int64_t        expected_vocabulary_count,
-                                                  int64_t        expected_hidden_size) {
+                                                  int64_t        expected_vocabulary_count) {
     ggml_cgraph * graph = ggml_new_graph(ctx);
     REQUIRE(graph != nullptr);
     ggml_build_forward_expand(graph, output);
@@ -1571,10 +1570,9 @@ static void schedule_qwen_token_embedding_command(ggml_context * ctx,
 
     const ggml::hrx::Dispatch & dispatch    = scheduler.plan().dispatches.front();
     const std::string           kernel_name = kernel_name_for_id(dispatch.kernel.kernel_id);
-    REQUIRE(kernel_name == "qwen3_moe:qwen_token_embedding_q4k_bringup_workaround");
+    REQUIRE(kernel_name == "qwen3_moe:qwen_token_embedding_q4k");
     REQUIRE(dispatch.kernel.integer_parameters.at("token_count") == expected_token_count);
     REQUIRE(dispatch.kernel.integer_parameters.at("vocabulary_count") == expected_vocabulary_count);
-    REQUIRE(dispatch.kernel.integer_parameters.at("hidden_size") == expected_hidden_size);
     REQUIRE(dispatch.bindings.size() == 3);
 
     const ggml::hrx::CommandProgram commands = ggml::hrx::build_command_program(
@@ -1602,7 +1600,7 @@ static void run_qwen_token_embedding_dispatch_checks() {
         REQUIRE(token_ids != nullptr);
         ggml_tensor * output = ggml_get_rows(ctx, weight, token_ids);
         REQUIRE(output != nullptr);
-        schedule_qwen_token_embedding_command(ctx, output, 1, 151936, 2048);
+        schedule_qwen_token_embedding_command(ctx, output, 1, 151936);
     }
     {
         ggml_tensor * weight    = ggml_new_tensor_2d(ctx, GGML_TYPE_Q4_K, 2048, 151936);
@@ -1611,16 +1609,7 @@ static void run_qwen_token_embedding_dispatch_checks() {
         REQUIRE(token_ids != nullptr);
         ggml_tensor * output = ggml_get_rows(ctx, weight, token_ids);
         REQUIRE(output != nullptr);
-        schedule_qwen_token_embedding_command(ctx, output, 13, 151936, 2048);
-    }
-    {
-        ggml_tensor * weight    = ggml_new_tensor_2d(ctx, GGML_TYPE_Q4_K, 3072, 248320);
-        ggml_tensor * token_ids = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 1);
-        REQUIRE(weight != nullptr);
-        REQUIRE(token_ids != nullptr);
-        ggml_tensor * output = ggml_get_rows(ctx, weight, token_ids);
-        REQUIRE(output != nullptr);
-        schedule_qwen_token_embedding_command(ctx, output, 1, 248320, 3072);
+        schedule_qwen_token_embedding_command(ctx, output, 13, 151936);
     }
 
     REQUIRE(
@@ -1631,6 +1620,8 @@ static void run_qwen_token_embedding_dispatch_checks() {
         !manual_token_embedding_graph_is_supported(ctx, GGML_TYPE_Q4_K, GGML_TYPE_I32, GGML_TYPE_F16, 2048, 151936, 1));
     REQUIRE(
         !manual_token_embedding_graph_is_supported(ctx, GGML_TYPE_Q4_K, GGML_TYPE_I32, GGML_TYPE_F32, 1024, 151936, 1));
+    REQUIRE(
+        !manual_token_embedding_graph_is_supported(ctx, GGML_TYPE_Q4_K, GGML_TYPE_I32, GGML_TYPE_F32, 3072, 248320, 1));
     REQUIRE(!manual_token_embedding_graph_is_supported(ctx, GGML_TYPE_Q4_K, GGML_TYPE_I32, GGML_TYPE_F32, 2048, 151936,
                                                        1, 2048, 2));
 
@@ -2216,8 +2207,7 @@ static void run_qwen_attention_postprocess_dispatch_checks() {
         const ggml::hrx::Dispatch & metadata        = plan.initialization_dispatches[1];
         REQUIRE(kernel_name_for_id(context_capture.kernel.kernel_id) ==
                 "qwen3_moe:qwen_attention_context_base_capture");
-        REQUIRE(kernel_name_for_id(metadata.kernel.kernel_id) ==
-                "qwen3_moe:qwen_attention_metadata_bringup_workaround");
+        REQUIRE(kernel_name_for_id(metadata.kernel.kernel_id) == "qwen3_moe:qwen_attention_metadata");
         REQUIRE(context_capture.bindings.size() == 2);
         REQUIRE(metadata.bindings.size() == 5);
         REQUIRE(context_capture.bindings[1].value == metadata.bindings[0].value);
@@ -2615,8 +2605,8 @@ static void schedule_manual_qwen_router_top8_command(ggml::hrx::Graph & graph,
     REQUIRE(expert_table_transient.size == expert_table_bytes);
     REQUIRE(partition_table_transient.size == partition_table_bytes);
 
-    const ggml::hrx::CommandPlanQwenRoutingBundle * bundle =
-        scheduler.plan().metadata.find_qwen_routing_bundle(route_ids);
+    const ggml::hrx::CommandPlanMoeRoutingBundle * bundle =
+        scheduler.plan().metadata.find_moe_routing_bundle(route_ids);
     REQUIRE(bundle != nullptr);
     REQUIRE(bundle->token_count == token_count);
     REQUIRE(bundle->route_count == route_count);
@@ -2845,8 +2835,8 @@ static void append_qwen_routed_down_for_graph(ggml::hrx::Graph &              gr
     REQUIRE(route_ids_value != nullptr);
     REQUIRE(glu_value != nullptr);
     REQUIRE(output_value != nullptr);
-    const ggml::hrx::CommandPlanQwenRoutingBundle * routing_bundle =
-        plan.metadata.find_qwen_routing_bundle(route_ids_value->id);
+    const ggml::hrx::CommandPlanMoeRoutingBundle * routing_bundle =
+        plan.metadata.find_moe_routing_bundle(route_ids_value->id);
     const ggml::hrx::CommandPlanAlternateValue * gate_up_alternate = plan.metadata.find_alternate_value(
         glu_value->id, GGML_TYPE_F16, qwen_routed_gate_up_f16_output_size(tensors.output->ne[2]));
     const ggml::hrx::CommandPlanAlternateValue * routed_down_alternate = plan.metadata.find_alternate_value(
@@ -2945,12 +2935,12 @@ static void run_qwen_routed_gate_up_dispatch_checks() {
         std::vector<bool>      covered_nodes(imported.graph.nodes().size(), false);
         ggml::hrx::CommandPlan plan = build_qwen_router_plan_for_graph(imported.graph, covered_nodes);
         const ggml::hrx::CommandPlanGeneratedResource * expert_table_resource = plan.metadata.find_generated_resource(
-            route_ids_value->id, ggml::hrx::GeneratedResourceRole::QwenMoeExpertTable);
+            route_ids_value->id, ggml::hrx::GeneratedResourceRole::MoeExpertTable);
         const ggml::hrx::CommandPlanGeneratedResource * partition_table_resource =
             plan.metadata.find_generated_resource(route_ids_value->id,
-                                                  ggml::hrx::GeneratedResourceRole::QwenMoePartitionTable);
-        const ggml::hrx::CommandPlanQwenRoutingBundle * routing_bundle =
-            plan.metadata.find_qwen_routing_bundle(route_ids_value->id);
+                                                  ggml::hrx::GeneratedResourceRole::MoePartitionTable);
+        const ggml::hrx::CommandPlanMoeRoutingBundle * routing_bundle =
+            plan.metadata.find_moe_routing_bundle(route_ids_value->id);
         REQUIRE(expert_table_resource != nullptr);
         REQUIRE(partition_table_resource != nullptr);
         REQUIRE(routing_bundle != nullptr);
@@ -2962,8 +2952,8 @@ static void run_qwen_routed_gate_up_dispatch_checks() {
         REQUIRE(routing_bundle->partition_table_byte_count == qwen_partition_table_size(token_count));
         REQUIRE(routing_bundle->route_count == kQwenRouterRouteCount);
         REQUIRE(routing_bundle->expert_count == kQwenRouterExpertCount);
-        ggml::hrx::QwenMoeRoutingResourceMetadata expert_metadata;
-        ggml::hrx::QwenMoeRoutingResourceMetadata partition_metadata;
+        ggml::hrx::MoeRoutingResourceMetadata expert_metadata;
+        ggml::hrx::MoeRoutingResourceMetadata partition_metadata;
         REQUIRE(expert_table_resource->metadata.read(expert_metadata));
         REQUIRE(partition_table_resource->metadata.read(partition_metadata));
         REQUIRE(expert_metadata.token_count == token_count);
@@ -3089,16 +3079,16 @@ static void run_qwen_routed_gate_up_dispatch_checks() {
         }
         REQUIRE(router_matches == 2);
         REQUIRE(plan.metadata.generated_resources().size() == 4);
-        REQUIRE(plan.metadata.qwen_routing_bundles().size() == 2);
+        REQUIRE(plan.metadata.moe_routing_bundles().size() == 2);
 
         const ggml::hrx::CommandPlanGeneratedResource * first_expert_table = plan.metadata.find_generated_resource(
-            first_route_ids_value->id, ggml::hrx::GeneratedResourceRole::QwenMoeExpertTable);
+            first_route_ids_value->id, ggml::hrx::GeneratedResourceRole::MoeExpertTable);
         const ggml::hrx::CommandPlanGeneratedResource * second_expert_table = plan.metadata.find_generated_resource(
-            second_route_ids_value->id, ggml::hrx::GeneratedResourceRole::QwenMoeExpertTable);
+            second_route_ids_value->id, ggml::hrx::GeneratedResourceRole::MoeExpertTable);
         const ggml::hrx::CommandPlanGeneratedResource * second_partition_table = plan.metadata.find_generated_resource(
-            second_route_ids_value->id, ggml::hrx::GeneratedResourceRole::QwenMoePartitionTable);
-        const ggml::hrx::CommandPlanQwenRoutingBundle * second_routing_bundle =
-            plan.metadata.find_qwen_routing_bundle(second_route_ids_value->id);
+            second_route_ids_value->id, ggml::hrx::GeneratedResourceRole::MoePartitionTable);
+        const ggml::hrx::CommandPlanMoeRoutingBundle * second_routing_bundle =
+            plan.metadata.find_moe_routing_bundle(second_route_ids_value->id);
         REQUIRE(first_expert_table != nullptr);
         REQUIRE(second_expert_table != nullptr);
         REQUIRE(second_partition_table != nullptr);
@@ -4247,8 +4237,8 @@ static void run_graph_program_cache_uid_mismatch_checks() {
     lookup            = alias_cache.get_or_build(*alias_graph1, corpus, "gfx1151");
     REQUIRE(lookup.valid());
     stats = alias_cache.stats();
-    REQUIRE(stats.builds == 2);
-    REQUIRE(stats.hits == 0);
+    REQUIRE(stats.builds == 1);
+    REQUIRE(stats.hits == 1);
 
     ggml_free(ctx);
 }

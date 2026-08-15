@@ -1185,7 +1185,7 @@ static void run_qwen_full_cache_prefill_flash_attention_scheduling_case(int64_t 
 
     const ggml::hrx::Dispatch * metadata_dispatch = nullptr;
     for (const ggml::hrx::Dispatch & dispatch : plan.initialization_dispatches) {
-        if (kernel_name_for_id(dispatch.kernel.kernel_id) == "qwen3_moe:qwen_attention_metadata_bringup_workaround") {
+        if (kernel_name_for_id(dispatch.kernel.kernel_id) == "qwen3_moe:qwen_attention_metadata") {
             metadata_dispatch = &dispatch;
         }
     }
@@ -1545,8 +1545,7 @@ static void run_token_embedding_q4k_cpu_reference_case() {
     ggml_build_forward_expand(cpu_graph, cpu_output);
     ggml_build_forward_expand(hrx_graph, hrx_output);
 
-    require_kernel_subsequence(scheduled_kernel_sequence(hrx_graph),
-                               { "qwen3_moe:qwen_token_embedding_q4k_bringup_workaround" });
+    require_kernel_subsequence(scheduled_kernel_sequence(hrx_graph), { "qwen3_moe:qwen_token_embedding_q4k" });
 
     ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu_backend);
     ggml_backend_buffer_t hrx_buffer = ggml_backend_alloc_ctx_tensors(hrx_ctx, hrx_backend);
