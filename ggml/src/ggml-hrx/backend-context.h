@@ -7,6 +7,7 @@
 #include "runtime/kernel-executable-cache.h"
 #include "runtime/prepared-command-program-cache.h"
 #include "runtime/transient-arena.h"
+#include "runtime/unified-memory.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -22,6 +23,7 @@ struct ggml_backend_hrx_device_context;
 struct ggml_backend_hrx_buffer_type_context {
     ggml_backend_hrx_device_context * device;
     std::string                       name;
+    bool                              host_visible = false;
 };
 
 struct ggml_backend_hrx_buffer_context {
@@ -33,15 +35,20 @@ struct ggml_backend_hrx_buffer_context {
 };
 
 struct ggml_backend_hrx_device_context {
-    hrx_device_t                         device = nullptr;
-    std::string                          name;
-    std::string                          description;
-    std::string                          architecture;
-    size_t                               memory_total = 0;
-    ggml_backend_buffer_type             buft         = {};
-    ggml_backend_hrx_buffer_type_context buft_context = {};
-    std::mutex                           buffer_stream_mutex;
-    hrx_stream_t                         buffer_stream = nullptr;
+    hrx_device_t                                   device = nullptr;
+    std::string                                    name;
+    std::string                                    description;
+    std::string                                    architecture;
+    size_t                                         memory_total       = 0;
+    // Temporary policy override until device feature discovery can select coherent host I/O automatically.
+    bool                                           use_unified_memory = false;
+    ggml_backend_buffer_type                       buft               = {};
+    ggml_backend_hrx_buffer_type_context           buft_context       = {};
+    ggml_backend_buffer_type                       host_buft          = {};
+    ggml_backend_hrx_buffer_type_context           host_buft_context  = {};
+    ggml::hrx::UnifiedBufferRegistry               unified_buffers;
+    std::mutex                                     buffer_stream_mutex;
+    hrx_stream_t                                   buffer_stream = nullptr;
 };
 
 struct ggml_backend_hrx_context {

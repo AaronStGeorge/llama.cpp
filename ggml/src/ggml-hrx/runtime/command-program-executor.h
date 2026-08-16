@@ -34,6 +34,7 @@ struct CommandProgramExecutionContext {
     TransientArena *        transient_arena    = nullptr;
     HostTransferManager *   host_transfers     = nullptr;
     HostWeightCache *       host_weights       = nullptr;
+    bool                    use_unified_memory = false;
 };
 
 struct PreparedCommandBinding {

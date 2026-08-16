@@ -136,10 +136,13 @@ struct HostStagingBuffer {
     size_t       length    = 0;
     bool         upload    = false;
     bool         download  = false;
+    // The HRX buffer aliases host_data and requires no explicit upload or download command.
+    bool         imported  = false;
 
     void clear();
 };
 
 Status allocate_host_staging_buffer(hrx_device_t device, size_t size, HostStagingBuffer & staging);
+Status import_host_staging_buffer(hrx_device_t device, void * host_data, size_t size, HostStagingBuffer & staging);
 
 }  // namespace ggml::hrx

@@ -17,6 +17,7 @@
 #include <cinttypes>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -33,6 +34,11 @@ static constexpr size_t      GGML_HRX_ALIGNMENT     = 256;
 // Device-local HRX buffers have no host address to return, so expose a non-null sentinel base as an offset coordinate.
 static constexpr uintptr_t   GGML_HRX_FAKE_PTR_BASE = 0x1000;
 static std::atomic<uint64_t> g_allocation_generation{ 1 };
+
+static bool environment_flag_enabled(const char * name) {
+    const char * value = std::getenv(name);
+    return value != nullptr && value[0] != '\0' && value[0] != '0';
+}
 
 static bool hrx_check(hrx_status_t status, const char * expression, const char * file, int line) {
     if (hrx_status_is_ok(status)) {
@@ -114,6 +120,10 @@ static const char * buffer_type_name(ggml_backend_buffer_type_t buft) {
     return static_cast<ggml_backend_hrx_buffer_type_context *>(buft->context)->name.c_str();
 }
 
+static bool buffer_type_is_host(ggml_backend_buffer_type_t buft) {
+    return static_cast<ggml_backend_hrx_buffer_type_context *>(buft->context)->host_visible;
+}
+
 static bool buffer_submit_and_wait(ggml_backend_hrx_device_context * device,
                                    hrx_status_t (*submit)(hrx_stream_t, void *),
                                    void * user_data) {
@@ -152,6 +162,9 @@ static hrx_status_t submit_copy_buffer(hrx_stream_t stream, void * user_data) {
 
 static void buffer_free(ggml_backend_buffer_t buffer) {
     auto * context = buffer_context(buffer);
+    if (context->base != reinterpret_cast<uint8_t *>(GGML_HRX_FAKE_PTR_BASE)) {
+        context->device->unified_buffers.remove(context->buffer);
+    }
     if (context->buffer != nullptr) {
         hrx_buffer_release(context->buffer);
     }
@@ -169,6 +182,10 @@ static void buffer_memset(ggml_backend_buffer_t buffer,
     auto *       context            = buffer_context(buffer);
     const size_t destination_offset = tensor_offset(context, tensor) + offset;
     GGML_ASSERT(destination_offset <= buffer->size && size <= buffer->size - destination_offset);
+    if (context->base != reinterpret_cast<uint8_t *>(GGML_HRX_FAKE_PTR_BASE)) {
+        std::memset(context->base + destination_offset, value, size);
+        return;
+    }
     FillBufferArgs args{ context->buffer, destination_offset, size, value };
     if (!buffer_submit_and_wait(context->device, submit_fill_buffer, &args)) {
         GGML_LOG_ERROR("%s: HRX buffer fill failed\n", __func__);
@@ -186,6 +203,10 @@ static void buffer_set(ggml_backend_buffer_t buffer,
     auto *       context            = buffer_context(buffer);
     const size_t destination_offset = tensor_offset(context, tensor) + offset;
     GGML_ASSERT(destination_offset <= buffer->size && size <= buffer->size - destination_offset);
+    if (context->base != reinterpret_cast<uint8_t *>(GGML_HRX_FAKE_PTR_BASE)) {
+        std::memcpy(context->base + destination_offset, data, size);
+        return;
+    }
     if (!HRX_CHECK(hrx_synchronous_h2d(context->device->device, data, context->buffer, destination_offset, size))) {
         GGML_LOG_ERROR("%s: HRX buffer upload failed\n", __func__);
     }
@@ -202,6 +223,10 @@ static void buffer_get(ggml_backend_buffer_t buffer,
     auto *       context       = buffer_context(buffer);
     const size_t source_offset = tensor_offset(context, tensor) + offset;
     GGML_ASSERT(source_offset <= buffer->size && size <= buffer->size - source_offset);
+    if (context->base != reinterpret_cast<uint8_t *>(GGML_HRX_FAKE_PTR_BASE)) {
+        std::memcpy(data, context->base + source_offset, size);
+        return;
+    }
     if (!HRX_CHECK(hrx_synchronous_d2h(context->device->device, context->buffer, source_offset, data, size))) {
         GGML_LOG_ERROR("%s: HRX buffer download failed\n", __func__);
     }
@@ -232,7 +257,11 @@ static void buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
     if (buffer->size == 0) {
         return;
     }
-    auto *         context = buffer_context(buffer);
+    auto * context = buffer_context(buffer);
+    if (context->base != reinterpret_cast<uint8_t *>(GGML_HRX_FAKE_PTR_BASE)) {
+        std::memset(context->base, value, buffer->size);
+        return;
+    }
     FillBufferArgs args{ context->buffer, 0, buffer->size, value };
     if (!buffer_submit_and_wait(context->device, submit_fill_buffer, &args)) {
         GGML_LOG_ERROR("%s: HRX buffer clear failed\n", __func__);
@@ -250,10 +279,14 @@ static const ggml_backend_buffer_i buffer_i = {
 
 static ggml_backend_buffer_t buffer_alloc(ggml_backend_buffer_type_t buft, size_t size) {
     auto *              type_context = static_cast<ggml_backend_hrx_buffer_type_context *>(buft->context);
+    const bool          host_visible = type_context->host_visible;
     hrx_buffer_params_t params       = {
-        HRX_MEMORY_TYPE_DEVICE_LOCAL,
+        host_visible ? HRX_MEMORY_TYPE_HOST_LOCAL | HRX_MEMORY_TYPE_HOST_COHERENT | HRX_MEMORY_TYPE_DEVICE_VISIBLE :
+                             HRX_MEMORY_TYPE_DEVICE_LOCAL,
         HRX_MEMORY_ACCESS_ALL,
-        HRX_BUFFER_USAGE_DEFAULT,
+        host_visible ?
+            HRX_BUFFER_USAGE_DEFAULT | HRX_BUFFER_USAGE_MAPPING_SCOPED | HRX_BUFFER_USAGE_MAPPING_PERSISTENT :
+            HRX_BUFFER_USAGE_DEFAULT,
         0,
     };
     hrx_buffer_t allocation = nullptr;
@@ -261,15 +294,27 @@ static ggml_backend_buffer_t buffer_alloc(ggml_backend_buffer_type_t buft, size_
                                                              size, &allocation))) {
         return nullptr;
     }
+    uint8_t * base = reinterpret_cast<uint8_t *>(GGML_HRX_FAKE_PTR_BASE);
+    if (host_visible && size > 0) {
+        void * mapped = nullptr;
+        if (!HRX_CHECK(hrx_buffer_map(allocation, HRX_MAP_READ | HRX_MAP_WRITE, 0, size, &mapped))) {
+            hrx_buffer_release(allocation);
+            return nullptr;
+        }
+        base = static_cast<uint8_t *>(mapped);
+    }
     const uint64_t generation = g_allocation_generation.fetch_add(1);
     auto *         context    = new (std::nothrow) ggml_backend_hrx_buffer_context{
-        type_context->device, allocation, reinterpret_cast<uint8_t *>(GGML_HRX_FAKE_PTR_BASE), generation, generation,
+        type_context->device, allocation, base, generation, generation,
     };
     if (context == nullptr) {
         if (allocation != nullptr) {
             hrx_buffer_release(allocation);
         }
         return nullptr;
+    }
+    if (host_visible && allocation != nullptr) {
+        type_context->device->unified_buffers.add(allocation, base, size);
     }
     return ggml_backend_buffer_init(buft, buffer_i, context, size);
 }
@@ -284,7 +329,7 @@ static size_t buffer_max_size(ggml_backend_buffer_type_t buft) {
 }
 
 static const ggml_backend_buffer_type_i buffer_type_i = {
-    buffer_type_name, buffer_alloc, buffer_alignment, buffer_max_size, nullptr, nullptr,
+    buffer_type_name, buffer_alloc, buffer_alignment, buffer_max_size, nullptr, buffer_type_is_host,
 };
 
 static const char * backend_name(ggml_backend_t backend) {
@@ -318,6 +363,13 @@ static void backend_set_tensor_async(ggml_backend_t backend,
         GGML_LOG_ERROR("%s: invalid HRX tensor upload\n", __func__);
         return;
     }
+    ggml::hrx::UnifiedBufferRef source = backend_context->device->unified_buffers.find(data, size);
+    if (source.valid()) {
+        // Preserve stream ordering while avoiding a pointer-based transfer path for HRX-owned coherent memory.
+        HRX_CHECK(hrx_stream_copy_buffer(backend_context->stream, source.buffer(), source.offset(), context->buffer,
+                                         tensor_base + offset, size));
+        return;
+    }
     HRX_CHECK(hrx_stream_copy_h2d(backend_context->stream, data, context->buffer, tensor_base + offset, size));
 }
 
@@ -332,6 +384,13 @@ static void backend_get_tensor_async(ggml_backend_t      backend,
     if (!ggml_backend_hrx_tensor_binding(tensor, &context, &tensor_base) || offset > ggml_nbytes(tensor) ||
         size > ggml_nbytes(tensor) - offset) {
         GGML_LOG_ERROR("%s: invalid HRX tensor download\n", __func__);
+        return;
+    }
+    ggml::hrx::UnifiedBufferRef destination = backend_context->device->unified_buffers.find(data, size);
+    if (destination.valid()) {
+        // The mapped destination remains directly readable after the caller synchronizes this backend.
+        HRX_CHECK(hrx_stream_copy_buffer(backend_context->stream, context->buffer, tensor_base + offset,
+                                         destination.buffer(), destination.offset(), size));
         return;
     }
     HRX_CHECK(hrx_stream_copy_d2h(backend_context->stream, context->buffer, tensor_base + offset, data, size));
@@ -423,12 +482,13 @@ static enum ggml_backend_dev_type device_type(ggml_backend_dev_t device) {
 }
 
 static void device_props(ggml_backend_dev_t device, ggml_backend_dev_props * props) {
+    auto * context     = device_context(device);
     props->name        = device_name(device);
     props->description = device_description(device);
     device_memory(device, &props->memory_free, &props->memory_total);
     props->type      = GGML_BACKEND_DEVICE_TYPE_GPU;
     props->device_id = nullptr;
-    props->caps      = { false, false, false, false };
+    props->caps      = { false, context->use_unified_memory, false, false };
 }
 
 static ggml_backend_t device_init(ggml_backend_dev_t device, const char * parameters) {
@@ -456,6 +516,11 @@ static ggml_backend_t device_init(ggml_backend_dev_t device, const char * parame
 
 static ggml_backend_buffer_type_t device_buffer_type(ggml_backend_dev_t device) {
     return &device_context(device)->buft;
+}
+
+static ggml_backend_buffer_type_t device_host_buffer_type(ggml_backend_dev_t device) {
+    auto * context = device_context(device);
+    return context->use_unified_memory ? &context->host_buft : nullptr;
 }
 
 static bool eager_capability_declared(enum ggml_op op) {
@@ -495,7 +560,9 @@ static bool device_supports_op(ggml_backend_dev_t device, const ggml_tensor * op
 }
 
 static bool device_supports_buffer_type(ggml_backend_dev_t device, ggml_backend_buffer_type_t buft) {
-    return buft == &device_context(device)->buft || ggml_backend_buft_is_host(buft);
+    auto * context = device_context(device);
+    return buft == &context->buft || (context->use_unified_memory && buft == &context->host_buft) ||
+           ggml_backend_buft_is_host(buft);
 }
 
 static const ggml_backend_device_i device_i = {
@@ -506,7 +573,7 @@ static const ggml_backend_device_i device_i = {
     device_props,
     device_init,
     device_buffer_type,
-    nullptr,
+    device_host_buffer_type,
     nullptr,
     device_supports_op,
     device_supports_buffer_type,
@@ -562,9 +629,13 @@ static std::unique_ptr<ggml_backend_hrx_reg_context> create_registry_context() {
             continue;
         }
         hrx_device_retain(hrx_device);
-        auto device_ctx    = std::make_unique<ggml_backend_hrx_device_context>();
-        device_ctx->device = hrx_device;
-        device_ctx->name   = "HRX" + std::to_string(i);
+        auto device_ctx                = std::make_unique<ggml_backend_hrx_device_context>();
+        device_ctx->device             = hrx_device;
+        device_ctx->name               = "HRX" + std::to_string(i);
+        device_ctx->use_unified_memory = environment_flag_enabled("GGML_HRX_USE_UNIFIED_MEMORY");
+        if (device_ctx->use_unified_memory) {
+            GGML_LOG_INFO("ggml_hrx: unified host I/O enabled by GGML_HRX_USE_UNIFIED_MEMORY\n");
+        }
         const std::optional<std::string> name =
             device_string_property(hrx_device, HRX_DEVICE_PROPERTY_NAME, "query HRX device name");
         const std::optional<std::string> architecture =
@@ -583,14 +654,17 @@ static std::unique_ptr<ggml_backend_hrx_reg_context> create_registry_context() {
             hrx_device_release(hrx_device);
             continue;
         }
-        device_ctx->memory_total = static_cast<size_t>(memory);
-        device_ctx->description  = *name + " (" + *architecture + ")";
-        device_ctx->architecture = *architecture;
-        device_ctx->buft_context = { device_ctx.get(), device_ctx->name };
-        device_ctx->buft         = { buffer_type_i, nullptr, &device_ctx->buft_context };
+        device_ctx->memory_total      = static_cast<size_t>(memory);
+        device_ctx->description       = *name + " (" + *architecture + ")";
+        device_ctx->architecture      = *architecture;
+        device_ctx->buft_context      = { device_ctx.get(), device_ctx->name, false };
+        device_ctx->buft              = { buffer_type_i, nullptr, &device_ctx->buft_context };
+        device_ctx->host_buft_context = { device_ctx.get(), device_ctx->name + "_HOST", true };
+        device_ctx->host_buft         = { buffer_type_i, nullptr, &device_ctx->host_buft_context };
         context->device_contexts.emplace_back(std::move(device_ctx));
         context->devices.push_back({ device_i, nullptr, context->device_contexts.back().get() });
-        context->device_contexts.back()->buft.device = &context->devices.back();
+        context->device_contexts.back()->buft.device      = &context->devices.back();
+        context->device_contexts.back()->host_buft.device = &context->devices.back();
     }
     return context;
 }

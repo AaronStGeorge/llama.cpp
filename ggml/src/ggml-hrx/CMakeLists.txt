@@ -214,6 +214,8 @@ ggml_add_backend_library(ggml-hrx
     runtime/prepared-command-program-cache.h
     runtime/transient-arena.cpp
     runtime/transient-arena.h
+    runtime/unified-memory.cpp
+    runtime/unified-memory.h
 )
 target_link_libraries(ggml-hrx PRIVATE ggml-hrx-kernel-corpus hrx::hrx loomc::loomc)
 target_include_directories(ggml-hrx PRIVATE . "${CMAKE_CURRENT_BINARY_DIR}" ../../../vendor)

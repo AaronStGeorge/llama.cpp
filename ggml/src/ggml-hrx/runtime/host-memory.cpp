@@ -269,12 +269,14 @@ HostStagingBuffer & HostStagingBuffer::operator=(HostStagingBuffer && other) noe
     length          = other.length;
     upload          = other.upload;
     download        = other.download;
+    imported        = other.imported;
     other.buffer    = nullptr;
     other.host_data = nullptr;
     other.value     = -1;
     other.length    = 0;
     other.upload    = false;
     other.download  = false;
+    other.imported  = false;
     return *this;
 }
 
@@ -288,6 +290,7 @@ void HostStagingBuffer::clear() {
     length    = 0;
     upload    = false;
     download  = false;
+    imported  = false;
 }
 
 Status allocate_host_staging_buffer(hrx_device_t device, size_t size, HostStagingBuffer & staging) {
@@ -296,6 +299,30 @@ Status allocate_host_staging_buffer(hrx_device_t device, size_t size, HostStagin
     if (status.success()) {
         staging.length = size;
     }
+    return status;
+}
+
+Status import_host_staging_buffer(hrx_device_t device, void * host_data, size_t size, HostStagingBuffer & staging) {
+    staging.clear();
+    Status status;
+    if (device == nullptr || host_data == nullptr || size == 0) {
+        status.log("invalid unified host binding");
+        return status;
+    }
+    const hrx_buffer_params_t params = {
+        HRX_MEMORY_TYPE_HOST_LOCAL | HRX_MEMORY_TYPE_HOST_COHERENT | HRX_MEMORY_TYPE_DEVICE_VISIBLE,
+        HRX_MEMORY_ACCESS_ALL,
+        HRX_BUFFER_USAGE_DEFAULT | HRX_BUFFER_USAGE_MAPPING_PERSISTENT,
+        0,
+    };
+    if (ErrorResult error = take_status(
+            hrx_allocator_import_buffer(hrx_device_allocator(device), params, host_data, size, &staging.buffer))) {
+        status.log("import unified host binding: %s", error->c_str());
+        return status;
+    }
+    staging.host_data = host_data;
+    staging.length    = size;
+    staging.imported  = true;
     return status;
 }
 
