@@ -17,7 +17,6 @@
 #include <cinttypes>
 #include <cstddef>
 #include <cstdint>
-#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -34,11 +33,6 @@ static constexpr size_t      GGML_HRX_ALIGNMENT     = 256;
 // Device-local HRX buffers have no host address to return, so expose a non-null sentinel base as an offset coordinate.
 static constexpr uintptr_t   GGML_HRX_FAKE_PTR_BASE = 0x1000;
 static std::atomic<uint64_t> g_allocation_generation{ 1 };
-
-static bool environment_flag_enabled(const char * name) {
-    const char * value = std::getenv(name);
-    return value != nullptr && value[0] != '\0' && value[0] != '0';
-}
 
 static bool hrx_check(hrx_status_t status, const char * expression, const char * file, int line) {
     if (hrx_status_is_ok(status)) {
@@ -163,7 +157,7 @@ static hrx_status_t submit_copy_buffer(hrx_stream_t stream, void * user_data) {
 static void buffer_free(ggml_backend_buffer_t buffer) {
     auto * context = buffer_context(buffer);
     if (context->base != reinterpret_cast<uint8_t *>(GGML_HRX_FAKE_PTR_BASE)) {
-        context->device->unified_buffers.remove(context->buffer);
+        context->device->host_buffers.remove(context->buffer);
     }
     if (context->buffer != nullptr) {
         hrx_buffer_release(context->buffer);
@@ -280,8 +274,10 @@ static const ggml_backend_buffer_i buffer_i = {
 static ggml_backend_buffer_t buffer_alloc(ggml_backend_buffer_type_t buft, size_t size) {
     auto *              type_context = static_cast<ggml_backend_hrx_buffer_type_context *>(buft->context);
     const bool          host_visible = type_context->host_visible;
+    // HRX host buffers are pinned transfer memory, not coherent shared memory. HOST_LOCAL makes the allocation host
+    // visible, DEVICE_VISIBLE permits handle-based stream copies, and the mapping usage keeps the GGML pointer valid.
     hrx_buffer_params_t params       = {
-        host_visible ? HRX_MEMORY_TYPE_HOST_LOCAL | HRX_MEMORY_TYPE_HOST_COHERENT | HRX_MEMORY_TYPE_DEVICE_VISIBLE :
+        host_visible ? HRX_MEMORY_TYPE_HOST_LOCAL | HRX_MEMORY_TYPE_DEVICE_VISIBLE :
                              HRX_MEMORY_TYPE_DEVICE_LOCAL,
         HRX_MEMORY_ACCESS_ALL,
         host_visible ?
@@ -314,7 +310,7 @@ static ggml_backend_buffer_t buffer_alloc(ggml_backend_buffer_type_t buft, size_
         return nullptr;
     }
     if (host_visible && allocation != nullptr) {
-        type_context->device->unified_buffers.add(allocation, base, size);
+        type_context->device->host_buffers.add(allocation, base, size);
     }
     return ggml_backend_buffer_init(buft, buffer_i, context, size);
 }
@@ -350,6 +346,50 @@ static void backend_free(ggml_backend_t backend) {
     delete backend;
 }
 
+static bool synchronous_upload_fallback(ggml_backend_hrx_context * backend,
+                                        const void *               source,
+                                        hrx_buffer_t               destination,
+                                        size_t                     destination_offset,
+                                        size_t                     size) {
+    const uint64_t fallback =
+        backend->device->synchronous_upload_fallbacks.fetch_add(1, std::memory_order_relaxed);
+    if (fallback == 0) {
+        GGML_LOG_WARN("ggml_hrx: synchronous upload fallback for an unregistered host pointer; use the HRX host "
+                      "buffer type for asynchronous transfers\n");
+    }
+    // Compatibility path for arbitrary GGML pointers. Keep the synchronization explicit until a bounded staging ring
+    // with transfer retirement is available.
+    const ggml::hrx::Status status =
+        backend->host_transfers.upload_synchronous(backend->stream, source, destination, destination_offset, size);
+    if (!status.success()) {
+        GGML_LOG_ERROR("%s: %s\n", __func__, status.errors().front().c_str());
+        return false;
+    }
+    return true;
+}
+
+static bool synchronous_download_fallback(ggml_backend_hrx_context * backend,
+                                          hrx_buffer_t               source,
+                                          size_t                     source_offset,
+                                          void *                     destination,
+                                          size_t                     size) {
+    const uint64_t fallback =
+        backend->device->synchronous_download_fallbacks.fetch_add(1, std::memory_order_relaxed);
+    if (fallback == 0) {
+        GGML_LOG_WARN("ggml_hrx: synchronous download fallback for an unregistered host pointer; use the HRX host "
+                      "buffer type for asynchronous transfers\n");
+    }
+    // Compatibility path for arbitrary GGML pointers. Keep the synchronization explicit until a bounded staging ring
+    // with transfer retirement is available.
+    const ggml::hrx::Status status =
+        backend->host_transfers.download_synchronous(backend->stream, source, source_offset, destination, size);
+    if (!status.success()) {
+        GGML_LOG_ERROR("%s: %s\n", __func__, status.errors().front().c_str());
+        return false;
+    }
+    return true;
+}
+
 static void backend_set_tensor_async(ggml_backend_t backend,
                                      ggml_tensor *  tensor,
                                      const void *   data,
@@ -363,14 +403,14 @@ static void backend_set_tensor_async(ggml_backend_t backend,
         GGML_LOG_ERROR("%s: invalid HRX tensor upload\n", __func__);
         return;
     }
-    ggml::hrx::UnifiedBufferRef source = backend_context->device->unified_buffers.find(data, size);
+    ggml::hrx::HostBufferRef source = backend_context->device->host_buffers.find(data, size);
     if (source.valid()) {
-        // Preserve stream ordering while avoiding a pointer-based transfer path for HRX-owned coherent memory.
+        // Registered host buffers can participate directly in the stream command buffer.
         HRX_CHECK(hrx_stream_copy_buffer(backend_context->stream, source.buffer(), source.offset(), context->buffer,
                                          tensor_base + offset, size));
-        return;
+    } else {
+        synchronous_upload_fallback(backend_context, data, context->buffer, tensor_base + offset, size);
     }
-    HRX_CHECK(hrx_stream_copy_h2d(backend_context->stream, data, context->buffer, tensor_base + offset, size));
 }
 
 static void backend_get_tensor_async(ggml_backend_t      backend,
@@ -386,14 +426,14 @@ static void backend_get_tensor_async(ggml_backend_t      backend,
         GGML_LOG_ERROR("%s: invalid HRX tensor download\n", __func__);
         return;
     }
-    ggml::hrx::UnifiedBufferRef destination = backend_context->device->unified_buffers.find(data, size);
+    ggml::hrx::HostBufferRef destination = backend_context->device->host_buffers.find(data, size);
     if (destination.valid()) {
-        // The mapped destination remains directly readable after the caller synchronizes this backend.
+        // Registered host buffers can participate directly in the stream command buffer.
         HRX_CHECK(hrx_stream_copy_buffer(backend_context->stream, context->buffer, tensor_base + offset,
                                          destination.buffer(), destination.offset(), size));
-        return;
+    } else {
+        synchronous_download_fallback(backend_context, context->buffer, tensor_base + offset, data, size);
     }
-    HRX_CHECK(hrx_stream_copy_d2h(backend_context->stream, context->buffer, tensor_base + offset, data, size));
 }
 
 static bool backend_copy_tensor_async(ggml_backend_t      backend_src,
@@ -419,8 +459,8 @@ static bool backend_copy_tensor_async(ggml_backend_t      backend_src,
     }
     ggml_backend_buffer_t source_buffer = source->view_src != nullptr ? source->view_src->buffer : source->buffer;
     if (source_buffer != nullptr && ggml_backend_buffer_is_host(source_buffer)) {
-        return HRX_CHECK(hrx_stream_copy_h2d(destination_backend->stream, source->data, destination_context->buffer,
-                                             destination_offset, size));
+        return synchronous_upload_fallback(
+            destination_backend, source->data, destination_context->buffer, destination_offset, size);
     }
     return false;
 }
@@ -482,13 +522,12 @@ static enum ggml_backend_dev_type device_type(ggml_backend_dev_t device) {
 }
 
 static void device_props(ggml_backend_dev_t device, ggml_backend_dev_props * props) {
-    auto * context     = device_context(device);
     props->name        = device_name(device);
     props->description = device_description(device);
     device_memory(device, &props->memory_free, &props->memory_total);
     props->type      = GGML_BACKEND_DEVICE_TYPE_GPU;
     props->device_id = nullptr;
-    props->caps      = { false, context->use_unified_memory, false, false };
+    props->caps      = { true, true, false, false };
 }
 
 static ggml_backend_t device_init(ggml_backend_dev_t device, const char * parameters) {
@@ -519,8 +558,7 @@ static ggml_backend_buffer_type_t device_buffer_type(ggml_backend_dev_t device) 
 }
 
 static ggml_backend_buffer_type_t device_host_buffer_type(ggml_backend_dev_t device) {
-    auto * context = device_context(device);
-    return context->use_unified_memory ? &context->host_buft : nullptr;
+    return &device_context(device)->host_buft;
 }
 
 static bool eager_capability_declared(enum ggml_op op) {
@@ -561,8 +599,7 @@ static bool device_supports_op(ggml_backend_dev_t device, const ggml_tensor * op
 
 static bool device_supports_buffer_type(ggml_backend_dev_t device, ggml_backend_buffer_type_t buft) {
     auto * context = device_context(device);
-    return buft == &context->buft || (context->use_unified_memory && buft == &context->host_buft) ||
-           ggml_backend_buft_is_host(buft);
+    return buft == &context->buft || buft == &context->host_buft || ggml_backend_buft_is_host(buft);
 }
 
 static const ggml_backend_device_i device_i = {
@@ -629,13 +666,9 @@ static std::unique_ptr<ggml_backend_hrx_reg_context> create_registry_context() {
             continue;
         }
         hrx_device_retain(hrx_device);
-        auto device_ctx                = std::make_unique<ggml_backend_hrx_device_context>();
-        device_ctx->device             = hrx_device;
-        device_ctx->name               = "HRX" + std::to_string(i);
-        device_ctx->use_unified_memory = environment_flag_enabled("GGML_HRX_USE_UNIFIED_MEMORY");
-        if (device_ctx->use_unified_memory) {
-            GGML_LOG_INFO("ggml_hrx: unified host I/O enabled by GGML_HRX_USE_UNIFIED_MEMORY\n");
-        }
+        auto device_ctx    = std::make_unique<ggml_backend_hrx_device_context>();
+        device_ctx->device = hrx_device;
+        device_ctx->name   = "HRX" + std::to_string(i);
         const std::optional<std::string> name =
             device_string_property(hrx_device, HRX_DEVICE_PROPERTY_NAME, "query HRX device name");
         const std::optional<std::string> architecture =

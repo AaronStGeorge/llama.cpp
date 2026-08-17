@@ -76,8 +76,11 @@ static void run_backend_buffer_checks(ggml_backend_t backend) {
     ggml_backend_tensor_set_async(backend, tensor, input.data(), 0, sizeof(input));
     ggml_backend_synchronize(backend);
     output.fill(0);
-    ggml_backend_tensor_get(tensor, output.data(), 0, sizeof(output));
+    ggml_backend_tensor_get_async(backend, tensor, output.data(), 0, sizeof(output));
+    ggml_backend_synchronize(backend);
     REQUIRE(output == input);
+    REQUIRE(hrx->device->synchronous_upload_fallbacks.load(std::memory_order_relaxed) == 1);
+    REQUIRE(hrx->device->synchronous_download_fallbacks.load(std::memory_order_relaxed) == 1);
 
     ggml_backend_tensor_memset(tensor, 0x5a, 16, 32);
     ggml_backend_tensor_get(tensor, output.data(), 0, sizeof(output));
@@ -99,7 +102,7 @@ static void run_backend_buffer_checks(ggml_backend_t backend) {
     REQUIRE(hrx->device->device != nullptr);
 }
 
-static void run_unified_buffer_checks(ggml_backend_t backend) {
+static void run_host_buffer_checks(ggml_backend_t backend) {
     ggml_backend_hrx_context * context = backend_context(backend);
     ggml_backend_buffer_type_t buft    = ggml_backend_dev_host_buffer_type(ggml_backend_get_device(backend));
     REQUIRE(buft != nullptr);
@@ -127,6 +130,17 @@ static void run_unified_buffer_checks(ggml_backend_t backend) {
     params.no_alloc         = true;
     ggml_context * ggml     = ggml_init(params);
     REQUIRE(ggml != nullptr);
+    ggml_tensor * host_tensor = ggml_new_tensor_1d(ggml, GGML_TYPE_I32, 64);
+    host_tensor->buffer       = buffer;
+    host_tensor->data         = ggml_backend_buffer_get_base(buffer);
+    REQUIRE(ggml_backend_buffer_init_tensor(buffer, host_tensor) == GGML_STATUS_SUCCESS);
+    ggml::hrx::ValueBufferBinding host_binding;
+    REQUIRE(ggml_backend_hrx_resolve_value_buffer(host_tensor, host_binding));
+    REQUIRE(host_binding.buffer == nullptr);
+    REQUIRE(host_binding.host_data == ggml_backend_buffer_get_base(buffer));
+    REQUIRE(host_binding.offset == 0);
+    REQUIRE(host_binding.length == ggml_nbytes(host_tensor));
+
     ggml_tensor *         tensor = ggml_new_tensor_1d(ggml, GGML_TYPE_I32, 64);
     ggml_backend_buffer_t local  = ggml_backend_alloc_buffer(backend, 4096);
     REQUIRE(local != nullptr);
@@ -134,18 +148,24 @@ static void run_unified_buffer_checks(ggml_backend_t backend) {
     tensor->data   = ggml_backend_buffer_get_base(local);
     REQUIRE(ggml_backend_buffer_init_tensor(local, tensor) == GGML_STATUS_SUCCESS);
 
-    auto * unified_words = static_cast<uint32_t *>(ggml_backend_buffer_get_base(buffer));
+    const uint64_t upload_fallbacks =
+        context->device->synchronous_upload_fallbacks.load(std::memory_order_relaxed);
+    const uint64_t download_fallbacks =
+        context->device->synchronous_download_fallbacks.load(std::memory_order_relaxed);
+    auto * host_words = static_cast<uint32_t *>(ggml_backend_buffer_get_base(buffer));
     for (size_t i = 0; i < 64; ++i) {
-        unified_words[i] = static_cast<uint32_t>(i * 13 + 7);
+        host_words[i] = static_cast<uint32_t>(i * 13 + 7);
     }
-    ggml_backend_tensor_set_async(backend, tensor, unified_words, 0, 64 * sizeof(uint32_t));
+    ggml_backend_tensor_set_async(backend, tensor, host_words, 0, 64 * sizeof(uint32_t));
     ggml_backend_synchronize(backend);
-    std::memset(unified_words, 0, 64 * sizeof(uint32_t));
-    ggml_backend_tensor_get_async(backend, tensor, unified_words, 0, 64 * sizeof(uint32_t));
+    std::memset(host_words, 0, 64 * sizeof(uint32_t));
+    ggml_backend_tensor_get_async(backend, tensor, host_words, 0, 64 * sizeof(uint32_t));
     ggml_backend_synchronize(backend);
     for (size_t i = 0; i < 64; ++i) {
-        REQUIRE(unified_words[i] == static_cast<uint32_t>(i * 13 + 7));
+        REQUIRE(host_words[i] == static_cast<uint32_t>(i * 13 + 7));
     }
+    REQUIRE(context->device->synchronous_upload_fallbacks.load(std::memory_order_relaxed) == upload_fallbacks);
+    REQUIRE(context->device->synchronous_download_fallbacks.load(std::memory_order_relaxed) == download_fallbacks);
 
     ggml_backend_buffer_free(local);
     ggml_backend_buffer_free(buffer);
@@ -165,8 +185,8 @@ static void run_host_transfer_checks(ggml_backend_hrx_context * context) {
         host[i] = static_cast<uint8_t>(i + 1);
     }
 
-    REQUIRE(transfers.upload(context->stream, host.data(), staging.buffer, 0, 0).success());
-    REQUIRE(transfers.upload(context->stream, host.data() + 8, staging.buffer, 16, 24).success());
+    REQUIRE(transfers.upload_synchronous(context->stream, host.data(), staging.buffer, 0, 0).success());
+    REQUIRE(transfers.upload_synchronous(context->stream, host.data() + 8, staging.buffer, 16, 24).success());
     ggml::hrx::HostTransferStats stats = transfers.stats();
     REQUIRE(stats.uploads == 1);
     REQUIRE(stats.upload_bytes == 24);
@@ -188,7 +208,8 @@ static void run_host_transfer_checks(ggml_backend_hrx_context * context) {
         hrx_synchronous_h2d(context->device->device, device_values.data(), staging.buffer, 0, device_values.size()));
 
     std::array<uint8_t, 48> download_result = {};
-    REQUIRE(transfers.download(context->stream, staging.buffer, 12, download_result.data() + 4, 20).success());
+    REQUIRE(transfers.download_synchronous(
+        context->stream, staging.buffer, 12, download_result.data() + 4, 20).success());
     stats = transfers.stats();
     REQUIRE(stats.downloads == 1);
     REQUIRE(stats.download_bytes == 20);
@@ -198,12 +219,12 @@ static void run_host_transfer_checks(ggml_backend_hrx_context * context) {
         REQUIRE(download_result[i] == expected);
     }
 
-    REQUIRE(!transfers.upload(nullptr, host.data(), staging.buffer, 0, 4).success());
-    REQUIRE(!transfers.upload(context->stream, nullptr, staging.buffer, 0, 4).success());
-    REQUIRE(!transfers.upload(context->stream, host.data(), nullptr, 0, 4).success());
-    REQUIRE(!transfers.download(nullptr, staging.buffer, 0, download_result.data(), 4).success());
-    REQUIRE(!transfers.download(context->stream, nullptr, 0, download_result.data(), 4).success());
-    REQUIRE(!transfers.download(context->stream, staging.buffer, 0, nullptr, 4).success());
+    REQUIRE(!transfers.upload_synchronous(nullptr, host.data(), staging.buffer, 0, 4).success());
+    REQUIRE(!transfers.upload_synchronous(context->stream, nullptr, staging.buffer, 0, 4).success());
+    REQUIRE(!transfers.upload_synchronous(context->stream, host.data(), nullptr, 0, 4).success());
+    REQUIRE(!transfers.download_synchronous(nullptr, staging.buffer, 0, download_result.data(), 4).success());
+    REQUIRE(!transfers.download_synchronous(context->stream, nullptr, 0, download_result.data(), 4).success());
+    REQUIRE(!transfers.download_synchronous(context->stream, staging.buffer, 0, nullptr, 4).success());
 
     transfers.clear();
     stats = transfers.stats();
@@ -238,22 +259,6 @@ static void run_host_staging_checks(ggml_backend_hrx_context * context) {
     REQUIRE(assigned.length == 0);
     assigned.clear();
     REQUIRE(assigned.buffer == nullptr);
-
-    alignas(64) std::array<uint32_t, 16> host = {};
-    ggml::hrx::HostStagingBuffer         imported;
-    REQUIRE(
-        ggml::hrx::import_host_staging_buffer(context->device->device, host.data(), sizeof(host), imported).success());
-    REQUIRE(imported.buffer != nullptr);
-    REQUIRE(imported.host_data == host.data());
-    REQUIRE(imported.length == sizeof(host));
-    REQUIRE(imported.imported);
-    const uint32_t pattern = 0xabcdef01;
-    require_hrx_status(
-        hrx_stream_fill_buffer(context->stream, imported.buffer, 0, sizeof(host), &pattern, sizeof(pattern)));
-    require_hrx_status(hrx_stream_synchronize(context->stream));
-    for (uint32_t value : host) {
-        REQUIRE(value == pattern);
-    }
 }
 
 static void run_host_weight_cache_checks(ggml_backend_hrx_context * context) {
@@ -340,11 +345,7 @@ int main() {
     ggml_backend_hrx_context * context = backend_context(backend);
 
     run_backend_buffer_checks(backend);
-    if (context->device->use_unified_memory) {
-        run_unified_buffer_checks(backend);
-    } else {
-        REQUIRE(ggml_backend_dev_host_buffer_type(ggml_backend_get_device(backend)) == nullptr);
-    }
+    run_host_buffer_checks(backend);
     run_host_transfer_checks(context);
     run_host_staging_checks(context);
     run_host_weight_cache_checks(context);

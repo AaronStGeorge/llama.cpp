@@ -208,10 +208,16 @@ static Status initialize_command_program_constants(const CommandProgramExecution
             continue;
         }
         // TODO: Track initialized transient arena allocation ids so constants are not transferred every invocation.
-        if (ErrorResult error = take_status(
-                hrx_stream_copy_h2d(context.stream, initialization.data.data(), allocation.buffer,
-                                    transient->arena_offset + initialization.offset, initialization.data.size()))) {
-            status.log("failed to upload constant initialization %s: %s", initialization.name.c_str(), error->c_str());
+        if (context.host_transfers == nullptr) {
+            status.log("constant initialization %s requires a host transfer manager", initialization.name.c_str());
+            continue;
+        }
+        Status upload_status = context.host_transfers->upload_synchronous(
+            context.stream, initialization.data.data(), allocation.buffer,
+            transient->arena_offset + initialization.offset, initialization.data.size());
+        if (!upload_status.success()) {
+            status.log("failed to upload constant initialization %s", initialization.name.c_str());
+            status.append(upload_status);
         }
     }
     return status;
@@ -348,10 +354,7 @@ static CommandProgramBindings materialize_host_bindings(const CommandProgramExec
         }
 
         HostStagingBuffer staging;
-        void * const      host_data = static_cast<uint8_t *>(binding.host_data) + binding.offset;
-        Status allocation_status = context.use_unified_memory ?
-                                       import_host_staging_buffer(context.device, host_data, binding.length, staging) :
-                                       allocate_host_staging_buffer(context.device, binding.length, staging);
+        Status            allocation_status = allocate_host_staging_buffer(context.device, binding.length, staging);
         if (!allocation_status.success()) {
             status.log("allocate host staging for value %d failed", binding.value.value);
             status.append(allocation_status);
@@ -359,7 +362,7 @@ static CommandProgramBindings materialize_host_bindings(const CommandProgramExec
             continue;
         }
         staging.value                        = binding.value.value;
-        staging.host_data                    = host_data;
+        staging.host_data                    = static_cast<uint8_t *>(binding.host_data) + binding.offset;
         staging.upload                       = access.read;
         staging.download                     = access.write;
         CommandProgramBinding device_binding = binding;
@@ -529,10 +532,17 @@ static Status prepare_program_constant_buffers(const CommandProgramExecutionCont
             status.log("allocate prepared constant %s: %s", image.name.c_str(), error->c_str());
             continue;
         }
-        if (ErrorResult error =
-                take_status(hrx_stream_copy_h2d(context.stream, image.data.data(), buffer, 0, image.data.size()))) {
+        if (context.host_transfers == nullptr) {
             hrx_buffer_release(buffer);
-            status.log("upload prepared constant %s: %s", image.name.c_str(), error->c_str());
+            status.log("prepared constant %s requires a host transfer manager", image.name.c_str());
+            continue;
+        }
+        Status upload_status =
+            context.host_transfers->upload_synchronous(context.stream, image.data.data(), buffer, 0, image.data.size());
+        if (!upload_status.success()) {
+            hrx_buffer_release(buffer);
+            status.log("upload prepared constant %s", image.name.c_str());
+            status.append(upload_status);
             continue;
         }
         prepared.program_constants.push_back(
@@ -547,37 +557,7 @@ static Status prepare_program_constant_buffers(const CommandProgramExecutionCont
     return status;
 }
 
-static bool imported_host_staging_address_changed(const CommandProgramBindings & bindings,
-                                                  const PreparedCommandProgram & prepared) {
-    for (const HostStagingBuffer & staging : prepared.host_staging) {
-        if (!staging.imported) {
-            continue;
-        }
-        const CommandProgramBinding * binding = bindings.find(ValueId(staging.value));
-        if (binding != nullptr && binding->host_data != nullptr &&
-            static_cast<uint8_t *>(binding->host_data) + binding->offset != staging.host_data) {
-            return true;
-        }
-    }
-    return false;
-}
-
-static void rebind_prepared_host_value(ValueId                         value,
-                                       hrx_buffer_t                    buffer,
-                                       std::vector<PreparedCommand> & commands) {
-    for (PreparedCommand & command : commands) {
-        for (PreparedCommandBinding & binding : command.kernel.bindings) {
-            if (binding.binding.origin == CommandBindingOrigin::GraphValue && binding.binding.value == value) {
-                binding.ref.buffer = buffer;
-                binding.ref.offset = 0;
-            }
-        }
-    }
-}
-
-static Status rebind_prepared_host_staging(const CommandProgramExecutionContext & context,
-                                           const CommandProgramBindings &         bindings,
-                                           PreparedCommandProgram &               prepared) {
+static Status rebind_prepared_host_staging(const CommandProgramBindings & bindings, PreparedCommandProgram & prepared) {
     Status status;
     for (HostStagingBuffer & staging : prepared.host_staging) {
         const CommandProgramBinding * binding = bindings.find(ValueId(staging.value));
@@ -586,25 +566,7 @@ static Status rebind_prepared_host_staging(const CommandProgramExecutionContext 
             status.log("live host binding does not match prepared value %d", staging.value);
             continue;
         }
-        void * const host_data = static_cast<uint8_t *>(binding->host_data) + binding->offset;
-        if (staging.imported && staging.host_data != host_data) {
-            HostStagingBuffer imported;
-            Status import_status =
-                import_host_staging_buffer(context.device, host_data, binding->length, imported);
-            if (!import_status.success()) {
-                status.log("reimport unified host binding for value %d failed", staging.value);
-                status.append(import_status);
-                continue;
-            }
-            imported.value    = staging.value;
-            imported.upload   = staging.upload;
-            imported.download = staging.download;
-            staging           = std::move(imported);
-            rebind_prepared_host_value(ValueId(staging.value), staging.buffer, prepared.initialization_commands);
-            rebind_prepared_host_value(ValueId(staging.value), staging.buffer, prepared.commands);
-            continue;
-        }
-        staging.host_data = host_data;
+        staging.host_data = static_cast<uint8_t *>(binding->host_data) + binding->offset;
     }
     return status;
 }
@@ -621,9 +583,6 @@ static Status upload_prepared_host_staging(const CommandProgramExecutionContext 
     }
     for (const HostStagingBuffer & staging : prepared.host_staging) {
         if (!staging.upload) {
-            continue;
-        }
-        if (staging.imported) {
             continue;
         }
         Status upload_status =
@@ -647,11 +606,8 @@ static Status download_prepared_host_staging(const CommandProgramExecutionContex
         if (!staging.download) {
             continue;
         }
-        if (staging.imported) {
-            continue;
-        }
-        Status download_status =
-            context.host_transfers->download(context.stream, staging.buffer, 0, staging.host_data, staging.length);
+        Status download_status = context.host_transfers->download_synchronous(
+            context.stream, staging.buffer, 0, staging.host_data, staging.length);
         status.append(download_status);
     }
     return status;
@@ -1066,7 +1022,7 @@ bool bind_and_execute_prepared_command_program(const CommandProgramExecutionCont
     if (!prepared.valid()) {
         return execute_prepared_command_program(context, prepared);
     }
-    Status rebind_status = rebind_prepared_host_staging(context, bindings, prepared);
+    Status rebind_status = rebind_prepared_host_staging(bindings, prepared);
     if (!rebind_status.success()) {
         GGML_LOG_ERROR("%s: %s\n", __func__, status_first_error(rebind_status));
         return false;
@@ -1136,10 +1092,7 @@ RecordedCommandGraphExecutionResult bind_and_launch_recorded_command_graph(
         return result;
     }
 
-    if (imported_host_staging_address_changed(bindings, prepared)) {
-        recorded = {};
-    }
-    Status rebind_status = rebind_prepared_host_staging(context, bindings, prepared);
+    Status rebind_status = rebind_prepared_host_staging(bindings, prepared);
     if (!rebind_status.success()) {
         result.status.append(rebind_status);
         result.event = HrxGraphReplayEvent::BuildFailed;

@@ -3,12 +3,13 @@
 #include "ggml-backend-impl.h"
 #include "graph/value-map.h"
 #include "runtime/graph-program-cache.h"
+#include "runtime/host-buffer-registry.h"
 #include "runtime/host-memory.h"
 #include "runtime/kernel-executable-cache.h"
 #include "runtime/prepared-command-program-cache.h"
 #include "runtime/transient-arena.h"
-#include "runtime/unified-memory.h"
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -39,14 +40,14 @@ struct ggml_backend_hrx_device_context {
     std::string                                    name;
     std::string                                    description;
     std::string                                    architecture;
-    size_t                                         memory_total       = 0;
-    // Temporary policy override until device feature discovery can select coherent host I/O automatically.
-    bool                                           use_unified_memory = false;
+    size_t                                         memory_total = 0;
     ggml_backend_buffer_type                       buft               = {};
     ggml_backend_hrx_buffer_type_context           buft_context       = {};
     ggml_backend_buffer_type                       host_buft          = {};
     ggml_backend_hrx_buffer_type_context           host_buft_context  = {};
-    ggml::hrx::UnifiedBufferRegistry               unified_buffers;
+    ggml::hrx::HostBufferRegistry                  host_buffers;
+    std::atomic<uint64_t>                          synchronous_upload_fallbacks{ 0 };
+    std::atomic<uint64_t>                          synchronous_download_fallbacks{ 0 };
     std::mutex                                     buffer_stream_mutex;
     hrx_stream_t                                   buffer_stream = nullptr;
 };

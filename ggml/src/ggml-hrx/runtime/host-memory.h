@@ -24,13 +24,15 @@ struct HostTransferStats {
 
 class HostTransferManager {
   public:
-    Status upload(hrx_stream_t stream, const void * host_source, hrx_buffer_t destination, size_t offset, size_t size);
+    Status upload_synchronous(
+        hrx_stream_t stream, const void * host_source, hrx_buffer_t destination, size_t offset, size_t size);
     Status upload_async(hrx_stream_t stream,
                         const void * host_source,
                         hrx_buffer_t destination,
                         size_t       offset,
                         size_t       size);
-    Status download(hrx_stream_t stream, hrx_buffer_t source, size_t offset, void * host_destination, size_t size);
+    Status download_synchronous(
+        hrx_stream_t stream, hrx_buffer_t source, size_t offset, void * host_destination, size_t size);
 
     HostTransferStats stats() const;
     void              clear();
@@ -136,13 +138,10 @@ struct HostStagingBuffer {
     size_t       length    = 0;
     bool         upload    = false;
     bool         download  = false;
-    // The HRX buffer aliases host_data and requires no explicit upload or download command.
-    bool         imported  = false;
 
     void clear();
 };
 
 Status allocate_host_staging_buffer(hrx_device_t device, size_t size, HostStagingBuffer & staging);
-Status import_host_staging_buffer(hrx_device_t device, void * host_data, size_t size, HostStagingBuffer & staging);
 
 }  // namespace ggml::hrx

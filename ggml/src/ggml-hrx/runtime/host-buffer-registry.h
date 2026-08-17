@@ -9,16 +9,16 @@ typedef struct hrx_buffer_s * hrx_buffer_t;
 
 namespace ggml::hrx {
 
-class UnifiedBufferRef {
+class HostBufferRef {
   public:
-    UnifiedBufferRef() = default;
-    ~UnifiedBufferRef();
+    HostBufferRef() = default;
+    ~HostBufferRef();
 
-    UnifiedBufferRef(UnifiedBufferRef && other) noexcept;
-    UnifiedBufferRef & operator=(UnifiedBufferRef && other) noexcept;
+    HostBufferRef(HostBufferRef && other) noexcept;
+    HostBufferRef & operator=(HostBufferRef && other) noexcept;
 
-    UnifiedBufferRef(const UnifiedBufferRef &)             = delete;
-    UnifiedBufferRef & operator=(const UnifiedBufferRef &) = delete;
+    HostBufferRef(const HostBufferRef &)             = delete;
+    HostBufferRef & operator=(const HostBufferRef &) = delete;
 
     bool valid() const { return buffer_ != nullptr; }
 
@@ -30,17 +30,17 @@ class UnifiedBufferRef {
     hrx_buffer_t buffer_ = nullptr;
     size_t       offset_ = 0;
 
-    UnifiedBufferRef(hrx_buffer_t buffer, size_t offset);
-    friend class UnifiedBufferRegistry;
+    HostBufferRef(hrx_buffer_t buffer, size_t offset);
+    friend class HostBufferRegistry;
 };
 
-// Tracks mapped buffers owned by the HRX buffer type so pointer-based GGML transfers can remain handle based.
-class UnifiedBufferRegistry {
+// Tracks mapped HRX host buffers so pointer-based GGML transfers can remain stream ordered and handle based.
+class HostBufferRegistry {
   public:
     void add(hrx_buffer_t buffer, void * base, size_t size);
     void remove(hrx_buffer_t buffer);
 
-    UnifiedBufferRef find(const void * data, size_t size) const;
+    HostBufferRef find(const void * data, size_t size) const;
 
   private:
     struct Entry {

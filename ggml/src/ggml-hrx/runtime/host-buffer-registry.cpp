@@ -1,4 +1,4 @@
-#include "unified-memory.h"
+#include "host-buffer-registry.h"
 
 #include "hrx_runtime.h"
 
@@ -7,21 +7,21 @@
 
 namespace ggml::hrx {
 
-UnifiedBufferRef::UnifiedBufferRef(hrx_buffer_t buffer, size_t offset) : buffer_(buffer), offset_(offset) {}
+HostBufferRef::HostBufferRef(hrx_buffer_t buffer, size_t offset) : buffer_(buffer), offset_(offset) {}
 
-UnifiedBufferRef::~UnifiedBufferRef() {
+HostBufferRef::~HostBufferRef() {
     if (buffer_ != nullptr) {
         hrx_buffer_release(buffer_);
     }
 }
 
-UnifiedBufferRef::UnifiedBufferRef(UnifiedBufferRef && other) noexcept :
+HostBufferRef::HostBufferRef(HostBufferRef && other) noexcept :
     buffer_(std::exchange(other.buffer_, nullptr)),
     offset_(other.offset_) {
     other.offset_ = 0;
 }
 
-UnifiedBufferRef & UnifiedBufferRef::operator=(UnifiedBufferRef && other) noexcept {
+HostBufferRef & HostBufferRef::operator=(HostBufferRef && other) noexcept {
     if (this != &other) {
         if (buffer_ != nullptr) {
             hrx_buffer_release(buffer_);
@@ -33,7 +33,7 @@ UnifiedBufferRef & UnifiedBufferRef::operator=(UnifiedBufferRef && other) noexce
     return *this;
 }
 
-void UnifiedBufferRegistry::add(hrx_buffer_t buffer, void * base, size_t size) {
+void HostBufferRegistry::add(hrx_buffer_t buffer, void * base, size_t size) {
     if (buffer == nullptr || base == nullptr || size == 0) {
         return;
     }
@@ -41,14 +41,14 @@ void UnifiedBufferRegistry::add(hrx_buffer_t buffer, void * base, size_t size) {
     entries_.push_back({ buffer, reinterpret_cast<uintptr_t>(base), size });
 }
 
-void UnifiedBufferRegistry::remove(hrx_buffer_t buffer) {
+void HostBufferRegistry::remove(hrx_buffer_t buffer) {
     std::lock_guard<std::mutex> lock(mutex_);
     entries_.erase(std::remove_if(entries_.begin(), entries_.end(),
                                   [buffer](const Entry & entry) { return entry.buffer == buffer; }),
                    entries_.end());
 }
 
-UnifiedBufferRef UnifiedBufferRegistry::find(const void * data, size_t size) const {
+HostBufferRef HostBufferRegistry::find(const void * data, size_t size) const {
     if (data == nullptr) {
         return {};
     }
@@ -63,7 +63,7 @@ UnifiedBufferRef UnifiedBufferRegistry::find(const void * data, size_t size) con
             continue;
         }
         hrx_buffer_retain(entry.buffer);
-        return UnifiedBufferRef(entry.buffer, offset);
+        return HostBufferRef(entry.buffer, offset);
     }
     return {};
 }

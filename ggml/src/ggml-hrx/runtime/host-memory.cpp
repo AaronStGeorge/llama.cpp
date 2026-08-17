@@ -36,11 +36,11 @@ static Status allocate_device_buffer(hrx_device_t device, size_t size, hrx_buffe
 
 }  // namespace
 
-Status HostTransferManager::upload(hrx_stream_t stream,
-                                   const void * host_source,
-                                   hrx_buffer_t destination,
-                                   size_t       offset,
-                                   size_t       size) {
+Status HostTransferManager::upload_synchronous(hrx_stream_t stream,
+                                               const void * host_source,
+                                               hrx_buffer_t destination,
+                                               size_t       offset,
+                                               size_t       size) {
     Status status;
     if (size == 0) {
         return status;
@@ -49,8 +49,17 @@ Status HostTransferManager::upload(hrx_stream_t stream,
         status.log("invalid HRX host upload");
         return status;
     }
-    if (ErrorResult error = take_status(hrx_stream_copy_h2d(stream, host_source, destination, offset, size))) {
-        status.log("HRX host upload failed: %s", error->c_str());
+    hrx_device_t device = nullptr;
+    if (ErrorResult error = take_status(hrx_stream_get_device(stream, &device))) {
+        status.log("query HRX upload device failed: %s", error->c_str());
+        return status;
+    }
+    if (ErrorResult error = take_status(hrx_stream_synchronize(stream))) {
+        status.log("synchronize before HRX host upload failed: %s", error->c_str());
+        return status;
+    }
+    if (ErrorResult error = take_status(hrx_synchronous_h2d(device, host_source, destination, offset, size))) {
+        status.log("synchronous HRX host upload failed: %s", error->c_str());
         return status;
     }
     std::lock_guard<std::mutex> lock(mutex_);
@@ -92,11 +101,11 @@ Status HostTransferManager::upload_async(hrx_stream_t stream,
     return status;
 }
 
-Status HostTransferManager::download(hrx_stream_t stream,
-                                     hrx_buffer_t source,
-                                     size_t       offset,
-                                     void *       host_destination,
-                                     size_t       size) {
+Status HostTransferManager::download_synchronous(hrx_stream_t stream,
+                                                 hrx_buffer_t source,
+                                                 size_t       offset,
+                                                 void *       host_destination,
+                                                 size_t       size) {
     Status status;
     if (size == 0) {
         return status;
@@ -105,8 +114,17 @@ Status HostTransferManager::download(hrx_stream_t stream,
         status.log("invalid HRX host download");
         return status;
     }
-    if (ErrorResult error = take_status(hrx_stream_copy_d2h(stream, source, offset, host_destination, size))) {
-        status.log("HRX host download failed: %s", error->c_str());
+    hrx_device_t device = nullptr;
+    if (ErrorResult error = take_status(hrx_stream_get_device(stream, &device))) {
+        status.log("query HRX download device failed: %s", error->c_str());
+        return status;
+    }
+    if (ErrorResult error = take_status(hrx_stream_synchronize(stream))) {
+        status.log("synchronize before HRX host download failed: %s", error->c_str());
+        return status;
+    }
+    if (ErrorResult error = take_status(hrx_synchronous_d2h(device, source, offset, host_destination, size))) {
+        status.log("synchronous HRX host download failed: %s", error->c_str());
         return status;
     }
     std::lock_guard<std::mutex> lock(mutex_);
@@ -217,8 +235,8 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
     if (!result.status.success()) {
         return result;
     }
-    result.status = transfers.upload(stream, static_cast<const uint8_t *>(source.host_data) + source.offset,
-                                     entry->buffer, 0, source.length);
+    result.status = transfers.upload_synchronous(
+        stream, static_cast<const uint8_t *>(source.host_data) + source.offset, entry->buffer, 0, source.length);
     if (!result.status.success()) {
         return result;
     }
@@ -269,14 +287,12 @@ HostStagingBuffer & HostStagingBuffer::operator=(HostStagingBuffer && other) noe
     length          = other.length;
     upload          = other.upload;
     download        = other.download;
-    imported        = other.imported;
     other.buffer    = nullptr;
     other.host_data = nullptr;
     other.value     = -1;
     other.length    = 0;
     other.upload    = false;
     other.download  = false;
-    other.imported  = false;
     return *this;
 }
 
@@ -290,7 +306,6 @@ void HostStagingBuffer::clear() {
     length    = 0;
     upload    = false;
     download  = false;
-    imported  = false;
 }
 
 Status allocate_host_staging_buffer(hrx_device_t device, size_t size, HostStagingBuffer & staging) {
@@ -299,30 +314,6 @@ Status allocate_host_staging_buffer(hrx_device_t device, size_t size, HostStagin
     if (status.success()) {
         staging.length = size;
     }
-    return status;
-}
-
-Status import_host_staging_buffer(hrx_device_t device, void * host_data, size_t size, HostStagingBuffer & staging) {
-    staging.clear();
-    Status status;
-    if (device == nullptr || host_data == nullptr || size == 0) {
-        status.log("invalid unified host binding");
-        return status;
-    }
-    const hrx_buffer_params_t params = {
-        HRX_MEMORY_TYPE_HOST_LOCAL | HRX_MEMORY_TYPE_HOST_COHERENT | HRX_MEMORY_TYPE_DEVICE_VISIBLE,
-        HRX_MEMORY_ACCESS_ALL,
-        HRX_BUFFER_USAGE_DEFAULT | HRX_BUFFER_USAGE_MAPPING_PERSISTENT,
-        0,
-    };
-    if (ErrorResult error = take_status(
-            hrx_allocator_import_buffer(hrx_device_allocator(device), params, host_data, size, &staging.buffer))) {
-        status.log("import unified host binding: %s", error->c_str());
-        return status;
-    }
-    staging.host_data = host_data;
-    staging.length    = size;
-    staging.imported  = true;
     return status;
 }
 
