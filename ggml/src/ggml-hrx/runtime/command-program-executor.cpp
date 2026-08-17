@@ -320,7 +320,7 @@ static CommandProgramBindings materialize_host_bindings(const CommandProgramExec
     materialized.reserve(bindings.bindings().size());
     const std::unordered_map<int32_t, GraphValueAccess> access_by_value = collect_graph_value_access(commands);
     for (const CommandProgramBinding & binding : bindings.bindings()) {
-        if (binding.host_data == nullptr) {
+        if (!binding.requires_materialization()) {
             materialized.push_back(binding);
             continue;
         }

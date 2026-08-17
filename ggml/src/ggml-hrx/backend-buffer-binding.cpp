@@ -71,17 +71,11 @@ bool ggml_backend_hrx_resolve_value_buffer(const ggml_tensor * tensor, ggml::hrx
         return true;
     }
     ggml_backend_buffer_t buffer = tensor->view_src != nullptr ? tensor->view_src->buffer : tensor->buffer;
-    if (ggml_backend_buffer_is_host(buffer)) {
-        binding.host_data  = context->base;
-        binding.offset     = offset;
-        binding.length     = ggml_nbytes(tensor);
-        binding.identity   = context->identity;
-        binding.generation = context->generation;
-        binding.capacity   = buffer->size;
-        binding.weight     = ggml_backend_buffer_get_usage(buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS;
-        return true;
-    }
-    binding.buffer               = context->buffer;
+    const bool directly_bindable = !ggml_backend_buffer_is_host(buffer) || context->direct_host_binding;
+    // Coherent HRX host allocations are directly device-addressable. Represent them with an HRX buffer handle so
+    // command-program preparation bypasses host materialization. Noncoherent host allocations remain host data.
+    binding.buffer               = directly_bindable ? context->buffer : nullptr;
+    binding.host_data            = directly_bindable ? nullptr : context->base;
     binding.offset               = offset;
     binding.length               = ggml_nbytes(tensor);
     binding.identity             = context->identity;

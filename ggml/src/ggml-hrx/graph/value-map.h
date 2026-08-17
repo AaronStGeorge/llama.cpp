@@ -53,6 +53,8 @@ enum class ValueKind : uint8_t {
 };
 
 struct ValueBufferBinding {
+    // A buffer is directly bindable by an HRX command program. Host data requires residency or staging before
+    // execution. These are alternate storage forms and should not both be populated.
     hrx_buffer_t buffer     = nullptr;
     size_t       offset     = 0;
     size_t       length     = 0;
@@ -61,6 +63,8 @@ struct ValueBufferBinding {
     size_t       capacity   = 0;
     void *       host_data  = nullptr;
     bool         weight     = false;
+
+    bool requires_materialization() const { return host_data != nullptr; }
 };
 
 struct Value {

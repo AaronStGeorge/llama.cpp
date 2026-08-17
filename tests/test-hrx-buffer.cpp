@@ -108,13 +108,17 @@ static void run_host_buffer_checks(ggml_backend_t backend) {
     REQUIRE(buft != nullptr);
     REQUIRE(ggml_backend_buft_is_host(buft));
 
+    const bool original_direct_host_bindings = context->device->use_direct_host_bindings;
+    context->device->use_direct_host_bindings = false;
     ggml_backend_buffer_t buffer = ggml_backend_buft_alloc_buffer(buft, 4096);
+    context->device->use_direct_host_bindings = original_direct_host_bindings;
     REQUIRE(buffer != nullptr);
     REQUIRE(ggml_backend_buffer_is_host(buffer));
     auto * buffer_context = ggml_backend_hrx_buffer_context_from_buffer(buffer);
     REQUIRE(buffer_context != nullptr);
     REQUIRE(buffer_context->buffer != nullptr);
     REQUIRE(buffer_context->base == ggml_backend_buffer_get_base(buffer));
+    REQUIRE(!buffer_context->direct_host_binding);
 
     const uint32_t pattern = 0x12345678;
     require_hrx_status(
@@ -134,12 +138,29 @@ static void run_host_buffer_checks(ggml_backend_t backend) {
     host_tensor->buffer       = buffer;
     host_tensor->data         = ggml_backend_buffer_get_base(buffer);
     REQUIRE(ggml_backend_buffer_init_tensor(buffer, host_tensor) == GGML_STATUS_SUCCESS);
-    ggml::hrx::ValueBufferBinding host_binding;
-    REQUIRE(ggml_backend_hrx_resolve_value_buffer(host_tensor, host_binding));
-    REQUIRE(host_binding.buffer == nullptr);
-    REQUIRE(host_binding.host_data == ggml_backend_buffer_get_base(buffer));
-    REQUIRE(host_binding.offset == 0);
-    REQUIRE(host_binding.length == ggml_nbytes(host_tensor));
+    ggml::hrx::ValueBufferBinding staged_binding;
+    REQUIRE(ggml_backend_hrx_resolve_value_buffer(host_tensor, staged_binding));
+    REQUIRE(staged_binding.buffer == nullptr);
+    REQUIRE(staged_binding.host_data == ggml_backend_buffer_get_base(buffer));
+    REQUIRE(staged_binding.offset == 0);
+    REQUIRE(staged_binding.length == ggml_nbytes(host_tensor));
+
+    context->device->use_direct_host_bindings = true;
+    ggml_backend_buffer_t direct_buffer = ggml_backend_buft_alloc_buffer(buft, 4096);
+    context->device->use_direct_host_bindings = original_direct_host_bindings;
+    REQUIRE(direct_buffer != nullptr);
+    auto * direct_buffer_context = ggml_backend_hrx_buffer_context_from_buffer(direct_buffer);
+    REQUIRE(direct_buffer_context->direct_host_binding);
+    ggml_tensor * direct_tensor = ggml_new_tensor_1d(ggml, GGML_TYPE_I32, 64);
+    direct_tensor->buffer       = direct_buffer;
+    direct_tensor->data         = ggml_backend_buffer_get_base(direct_buffer);
+    REQUIRE(ggml_backend_buffer_init_tensor(direct_buffer, direct_tensor) == GGML_STATUS_SUCCESS);
+    ggml::hrx::ValueBufferBinding direct_binding;
+    REQUIRE(ggml_backend_hrx_resolve_value_buffer(direct_tensor, direct_binding));
+    REQUIRE(direct_binding.buffer == direct_buffer_context->buffer);
+    REQUIRE(direct_binding.host_data == nullptr);
+    REQUIRE(direct_binding.offset == 0);
+    REQUIRE(direct_binding.length == ggml_nbytes(direct_tensor));
 
     ggml_tensor *         tensor = ggml_new_tensor_1d(ggml, GGML_TYPE_I32, 64);
     ggml_backend_buffer_t local  = ggml_backend_alloc_buffer(backend, 4096);
@@ -168,6 +189,7 @@ static void run_host_buffer_checks(ggml_backend_t backend) {
     REQUIRE(context->device->synchronous_download_fallbacks.load(std::memory_order_relaxed) == download_fallbacks);
 
     ggml_backend_buffer_free(local);
+    ggml_backend_buffer_free(direct_buffer);
     ggml_backend_buffer_free(buffer);
     ggml_free(ggml);
 }

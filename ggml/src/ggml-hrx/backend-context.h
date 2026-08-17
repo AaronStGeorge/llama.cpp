@@ -33,6 +33,7 @@ struct ggml_backend_hrx_buffer_context {
     uint8_t *                         base;
     uint64_t                          identity;
     uint64_t                          generation;
+    bool                              direct_host_binding;
 };
 
 struct ggml_backend_hrx_device_context {
@@ -41,6 +42,7 @@ struct ggml_backend_hrx_device_context {
     std::string                                    description;
     std::string                                    architecture;
     size_t                                         memory_total = 0;
+    bool                                           use_direct_host_bindings = false;
     ggml_backend_buffer_type                       buft               = {};
     ggml_backend_hrx_buffer_type_context           buft_context       = {};
     ggml_backend_buffer_type                       host_buft          = {};

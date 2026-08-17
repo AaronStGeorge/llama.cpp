@@ -17,6 +17,7 @@
 #include <cinttypes>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -33,6 +34,11 @@ static constexpr size_t      GGML_HRX_ALIGNMENT     = 256;
 // Device-local HRX buffers have no host address to return, so expose a non-null sentinel base as an offset coordinate.
 static constexpr uintptr_t   GGML_HRX_FAKE_PTR_BASE = 0x1000;
 static std::atomic<uint64_t> g_allocation_generation{ 1 };
+
+static bool environment_flag_enabled(const char * name) {
+    const char * value = std::getenv(name);
+    return value != nullptr && value[0] != '\0' && value[0] != '0';
+}
 
 static bool hrx_check(hrx_status_t status, const char * expression, const char * file, int line) {
     if (hrx_status_is_ok(status)) {
@@ -274,11 +280,18 @@ static const ggml_backend_buffer_i buffer_i = {
 static ggml_backend_buffer_t buffer_alloc(ggml_backend_buffer_type_t buft, size_t size) {
     auto *              type_context = static_cast<ggml_backend_hrx_buffer_type_context *>(buft->context);
     const bool          host_visible = type_context->host_visible;
-    // HRX host buffers are pinned transfer memory, not coherent shared memory. HOST_LOCAL makes the allocation host
-    // visible, DEVICE_VISIBLE permits handle-based stream copies, and the mapping usage keeps the GGML pointer valid.
+    const bool          direct_host_binding = host_visible && type_context->device->use_direct_host_bindings;
+    hrx_memory_type_t   memory_type          = HRX_MEMORY_TYPE_DEVICE_LOCAL;
+    // Direct command-program bindings require coherent CPU/GPU visibility. Otherwise HRX host buffers are pinned
+    // transfer memory: DEVICE_VISIBLE permits handle-based stream copies without implying direct device access.
+    if (host_visible) {
+        memory_type = HRX_MEMORY_TYPE_HOST_LOCAL | HRX_MEMORY_TYPE_DEVICE_VISIBLE;
+        if (direct_host_binding) {
+            memory_type |= HRX_MEMORY_TYPE_HOST_COHERENT;
+        }
+    }
     hrx_buffer_params_t params       = {
-        host_visible ? HRX_MEMORY_TYPE_HOST_LOCAL | HRX_MEMORY_TYPE_DEVICE_VISIBLE :
-                             HRX_MEMORY_TYPE_DEVICE_LOCAL,
+        memory_type,
         HRX_MEMORY_ACCESS_ALL,
         host_visible ?
             HRX_BUFFER_USAGE_DEFAULT | HRX_BUFFER_USAGE_MAPPING_SCOPED | HRX_BUFFER_USAGE_MAPPING_PERSISTENT :
@@ -301,7 +314,7 @@ static ggml_backend_buffer_t buffer_alloc(ggml_backend_buffer_type_t buft, size_
     }
     const uint64_t generation = g_allocation_generation.fetch_add(1);
     auto *         context    = new (std::nothrow) ggml_backend_hrx_buffer_context{
-        type_context->device, allocation, base, generation, generation,
+        type_context->device, allocation, base, generation, generation, direct_host_binding,
     };
     if (context == nullptr) {
         if (allocation != nullptr) {
@@ -666,9 +679,13 @@ static std::unique_ptr<ggml_backend_hrx_reg_context> create_registry_context() {
             continue;
         }
         hrx_device_retain(hrx_device);
-        auto device_ctx    = std::make_unique<ggml_backend_hrx_device_context>();
-        device_ctx->device = hrx_device;
-        device_ctx->name   = "HRX" + std::to_string(i);
+        auto device_ctx                      = std::make_unique<ggml_backend_hrx_device_context>();
+        device_ctx->device                   = hrx_device;
+        device_ctx->name                     = "HRX" + std::to_string(i);
+        device_ctx->use_direct_host_bindings = environment_flag_enabled("GGML_HRX_USE_UNIFIED_MEMORY");
+        if (device_ctx->use_direct_host_bindings) {
+            GGML_LOG_INFO("ggml_hrx: direct coherent host bindings enabled by GGML_HRX_USE_UNIFIED_MEMORY\n");
+        }
         const std::optional<std::string> name =
             device_string_property(hrx_device, HRX_DEVICE_PROPERTY_NAME, "query HRX device name");
         const std::optional<std::string> architecture =

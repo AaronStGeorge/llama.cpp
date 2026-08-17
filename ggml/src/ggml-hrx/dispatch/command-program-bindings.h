@@ -11,6 +11,8 @@
 namespace ggml::hrx {
 
 struct CommandProgramBinding {
+    // A buffer is directly bindable by an HRX command program. Host data requires residency or staging before
+    // execution. These are alternate storage forms and should not both be populated.
     ValueId      value;
     hrx_buffer_t buffer     = nullptr;
     size_t       offset     = 0;
@@ -20,6 +22,8 @@ struct CommandProgramBinding {
     size_t       capacity   = 0;
     void *       host_data  = nullptr;
     bool         weight     = false;
+
+    bool requires_materialization() const { return host_data != nullptr; }
 };
 
 struct CommandProgramBindingsFingerprint {
