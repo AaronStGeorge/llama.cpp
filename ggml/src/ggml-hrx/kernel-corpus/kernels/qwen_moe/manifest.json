@@ -4,50 +4,50 @@
   "upstream_revision": "d343e4ad5167dca6758cb0d2db08785e43e99070",
   "source_subdirectory": "experimental/qwen_moe/kernels",
   "qwen_endpoint_source_subdirectory": "experimental/qwen/kernels",
-  "corpus_sha256": "ce2711ba360db150344d63658b6fc0024954e4ad4c598233caed7680ca85f993",
-  "upstream_corpus_sha256": "76f504d2c19e85a1b51679bb2edc5e9a60b865f545ecaabacedd14ba7db15842",
+  "corpus_sha256": "3622e6284b9a24134cb123adf171b69b018bd3ebec0895578c15ac69edee048b",
+  "upstream_corpus_sha256": "ce0080910d91a7595161bef3536ff60e9112eb63dd1cb22c53dd9dc81c81923b",
   "owned_corpus_sha256": "1126fc55f6123c13ee9a8a8d146082bd9b63d9fd1ed123e27478ff964e58ad44",
   "build_bazel_sha256": "598eeb34f8606182a732299c989387dd450c0d8f33e4275635b4a679c0f986d0",
   "files": [
     {
       "path": "ggml/linear_q6k_f32.loom",
-      "sha256": "f20c9cd0ce58c6158b8b45bf6c9502dc22d20d2a67eee975d96e7625f87ef615",
-      "size": 28513
+      "sha256": "f8f1a16852b5332b1ddfdf960850cfe39a871c0f09817cd6ea6f35a14ad9d64f",
+      "size": 28731
     },
     {
       "path": "ggml/linear_q6k_q8_1_x4.loom",
-      "sha256": "865795fdd3111e1e29bfe07325a3057c55656773109caec1224ac42e03d86bba",
-      "size": 32592
+      "sha256": "3bda48a78430b55cfd2f1bd17042123754e6e2f1193a419752092ab2c26bbe10",
+      "size": 32822
     },
     {
       "path": "ggml/quantize_q8_1_x4.loom",
-      "sha256": "a9e6e995dd541142574058d4412f313beb87b6c6f4bb750b23a0a3047c951183",
-      "size": 16711
+      "sha256": "f254314a6618910a1a44e330a59bbab984388e5caa2a9651d2db116a43cca263",
+      "size": 16861
     },
     {
       "path": "qwen3_moe/attention_postprocess_f32_f16.loom",
-      "sha256": "9125cd1ef87cb0d0ca8f4f6fc0c0a5bec29f9d6b30894287b53ad2d98c9433fb",
-      "size": 25955
+      "sha256": "2ff96ed49853df15baefd9ceb04c1de36629204b68d5bc4c7cc14d4ec40f1b02",
+      "size": 26418
     },
     {
       "path": "qwen3_moe/attention_prepare_quantized.loom",
-      "sha256": "4bd47e89d1569e3622de60d88a6e09309afe35d48d3b6b1f25469e3b71aa7118",
-      "size": 29030
+      "sha256": "6560fa9247b40a5e5bd5e12ab1b5e3c39280720f39c65a8b4cd2999f38914eaf",
+      "size": 29278
     },
     {
       "path": "qwen3_moe/attention_qkv_postprocess_fused.loom",
-      "sha256": "409f9f95ad8b0a58691cc74d665489d3d65ae37c73fb682b405ebff0bf1c0c79",
-      "size": 24797
+      "sha256": "a7c05d75f3eea590189eb2a4abea7e3d038d1dc82ef3b44e3361d6cc9c3b6200",
+      "size": 26275
     },
     {
       "path": "qwen3_moe/attention_qkv_quantized.loom",
-      "sha256": "7b631b54e042ead32c52b8ddacba4fd58de588571b586a05719f0ddcee080cc1",
-      "size": 25990
+      "sha256": "5c7fca270dc0ea609d676289ad16e3c9c382811a4a092abb12ea85decdf2120b",
+      "size": 26294
     },
     {
       "path": "qwen3_moe/attention_qkv_same_format_prefill.loom",
-      "sha256": "55aeb3857c0646e9a1f05570ae6860fe42b0cfa91198868fc46bbed19f1c02fb",
-      "size": 12730
+      "sha256": "64d69940a3bc38742449f17ccfff4dccc45da1b51d4aca3b3410611b5aa628cf",
+      "size": 13005
     },
     {
       "path": "qwen3_moe/batched_decode_expert_dispatch.loom",
@@ -61,8 +61,8 @@
     },
     {
       "path": "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
-      "sha256": "331fbf77a24fd22424d75e7d7716cc78af8f43899bfe15b2ee947aa9c68f0bd8",
-      "size": 68289
+      "sha256": "3067137882a97803fdf167870cc08e26d6343f81fce0f41853687f60fdd566d6",
+      "size": 69146
     },
     {
       "path": "qwen3_moe/expert_table_partition_fused.loom",
@@ -81,13 +81,13 @@
     },
     {
       "path": "qwen3_moe/flash_attention_decode_split_f32_f16_wmma.loom",
-      "sha256": "466b17c488f5c0889aa55c208894a67eb6db0e1d91ba0e08a5b3e8fb4c82a94f",
-      "size": 94449
+      "sha256": "7fc27bfb3b4a569809c488bb188d0c17444b5cee181df4441b3d2b8a05d0bc67",
+      "size": 95917
     },
     {
       "path": "qwen3_moe/flash_attention_decode_split_next_q8_test.loom",
-      "sha256": "8bf53905b313dbe8ee6007e7dc7deac64d3b7412bf36180cb19c3c66d8a3255b",
-      "size": 9162
+      "sha256": "993900f0258e89fc7cd6cc163c2dfe3f153ba24e01d0a92f31dfbf3b15b8c6a3",
+      "size": 9441
     },
     {
       "path": "qwen3_moe/flash_attention_f32_f16_wmma.loom",
@@ -101,23 +101,23 @@
     },
     {
       "path": "qwen3_moe/routed_down_q4k.loom",
-      "sha256": "cf7027093e3baadd2e6cc50ca70943c7f228781d0e042c7673110ec4e5dd9e29",
-      "size": 33238
+      "sha256": "57c7ebcbd011e29609f6a0d4e12e45f206315a80548bbb547eee4666db6d8878",
+      "size": 33840
     },
     {
       "path": "qwen3_moe/routed_down_q6k.loom",
-      "sha256": "fd8bc76bafd174fd57e298849f65c2876186b1c6aeaa90e3b419f26b2a5d0326",
-      "size": 64580
+      "sha256": "3ceafc5486018e9bdcb61dc1701486312988b9ad2034cf0ca894cfa98057e62e",
+      "size": 66120
     },
     {
       "path": "qwen3_moe/routed_down_next_q8.loom",
-      "sha256": "3eccaa3290b83967a44958064bbc11960f9db77e68436178c2c5a50052014e2b",
-      "size": 4239
+      "sha256": "1361e704c82cbacd7563b01393bffb78306f68b7bc70d4c8c701530e08bf81bf",
+      "size": 4745
     },
     {
       "path": "qwen3_moe/routed_down_quantized_f16_wmma.loom",
-      "sha256": "b97a8e15a581acbc9b1de5776c7ef2ac727e8c138686ed496e2913814d2fd343",
-      "size": 75125
+      "sha256": "a926d47d6bafe0ae57bfd8579c5a99cbea6a1c2151cb70fcb6e2a355a31da321",
+      "size": 75317
     },
     {
       "path": "qwen3_moe/routed_down_weighted_reduce_next_rmsnorm_f32.loom",
@@ -131,8 +131,8 @@
     },
     {
       "path": "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-      "sha256": "e5d5ed276070ae25e8f1d915e927716da519314d34319db4b722d30589233deb",
-      "size": 125922
+      "sha256": "5cae8e18c91b3ab000d70bf0acd97622e4ec2f859db78e450c9aee764b1829f1",
+      "size": 126447
     },
     {
       "path": "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
@@ -141,18 +141,18 @@
     },
     {
       "path": "qwen3_moe/router_projection_f32.loom",
-      "sha256": "6c3eaf6834af0a58ecbd91702e009d410c4e7d52eac106a98a0f634f1d452ed5",
-      "size": 18655
+      "sha256": "983823a89637f7d06b423ce754564b10958c31a6326fc0b07c45f67c020f896d",
+      "size": 18798
     },
     {
       "path": "qwen3_moe/router_projection_top8_fused_f32.loom",
-      "sha256": "193615e54d175a8d2231bfda1f2c7672e338c1e0c4eef01cf0a5c3e35b26daa4",
-      "size": 17578
+      "sha256": "3ac52dbba3b4a8f45c5961fa154ddf774536e7344f03ee671daa6e502ec4e180",
+      "size": 18238
     },
     {
       "path": "qwen3_moe/router_top8_f32.loom",
-      "sha256": "84738d2baee5b1a54dff2939a933024222fe8dee76ea30d71af1921b23a9e665",
-      "size": 14431
+      "sha256": "8d4e47fb471b5e7ea1946618a21863c1b2fcee98bee409732489d37301ec9bdc",
+      "size": 14622
     },
     {
       "path": "../qwen_owned/token_embedding_q4k.loom",
