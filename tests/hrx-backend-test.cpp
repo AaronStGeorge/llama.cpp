@@ -8890,6 +8890,52 @@ static void run_zero_output_scheduler_elision_checks() {
     ggml_free(ctx);
 }
 
+static void run_empty_expert_view_graph_match_checks() {
+    ggml_context * ctx = ggml_init({ 2 * 1024 * 1024, nullptr, true });
+    REQUIRE(ctx != nullptr);
+
+    // Qwen's final MoE layer receives zero rows for microbatches without logits.
+    // Its eight expert views retain their offsets even when their producer is empty.
+    for (int64_t token_count : { 0, 1 }) {
+        ggml_tensor * lhs = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 2048, 8, token_count);
+        ggml_tensor * rhs = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 2048, 8, token_count);
+        ggml_tensor * experts = ggml_add(ctx, lhs, rhs);
+        ggml_cgraph * graph = ggml_new_graph(ctx);
+        graph->uid = 9100 + token_count;
+        std::vector<ggml_tensor *> views;
+        for (size_t expert = 0; expert < 8; ++expert) {
+            ggml_tensor * view = ggml_view_2d(ctx, experts, 2048, token_count, experts->nb[2],
+                                             expert * experts->nb[1]);
+            ggml_build_forward_expand(graph, view);
+            views.push_back(view);
+        }
+
+        ggml::hrx::GraphProgramCache cache;
+        auto lookup = cache.get_or_build(*graph, ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
+        REQUIRE(lookup.valid());
+        REQUIRE(lookup.program->match_current_graph(*graph).valid());
+        if (token_count == 0) {
+            REQUIRE(lookup.program->commands().commands.empty());
+        }
+        REQUIRE(cache.get_or_build(*graph, ggml::hrx::get_qwen_kernel_corpus(), "gfx1151").valid());
+        REQUIRE(cache.stats().hits == 1);
+
+        // Empty views still have an alias identity: changed offsets or roots must
+        // not silently match the cached graph merely because no bytes are read.
+        ggml_tensor * view = views[1];
+        const size_t saved_offset = view->view_offs;
+        view->view_offs += sizeof(float);
+        REQUIRE(!lookup.program->match_current_graph(*graph).valid());
+        view->view_offs = saved_offset;
+        view->view_src = rhs;
+        REQUIRE(!lookup.program->match_current_graph(*graph).valid());
+        view->view_src = experts;
+        REQUIRE(lookup.program->match_current_graph(*graph).valid());
+    }
+
+    ggml_free(ctx);
+}
+
 static void run_zero_output_device_support_checks() {
     ggml_backend_t backend = ggml_backend_hrx_init(0);
     REQUIRE(backend != nullptr);
@@ -10818,6 +10864,7 @@ static void register_hrx_backend_host_cases(test_runner::Suite & suite) {
     suite.host_case("multi_dispatch", [] { run_multi_dispatch_checks(); });
     suite.host_case("layout_alias_scheduler_elision", [] { run_layout_alias_scheduler_elision_checks(); });
     suite.host_case("zero_output_scheduler_elision", [] { run_zero_output_scheduler_elision_checks(); });
+    suite.host_case("empty_expert_view_graph_match", [] { run_empty_expert_view_graph_match_checks(); });
     suite.host_case("transient_import", [] { run_transient_import_checks(); });
     suite.host_case("graph_view_preserves_shared_output_storage", [] { run_graph_view_preserves_shared_output_storage_checks(); });
     suite.host_case("chained_dispatch_requires_transients", [] { run_chained_dispatch_requires_transients(); });
